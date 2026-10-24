@@ -1,0 +1,29 @@
+# Copy to config.toml. Everything is optional; defaults are in alarmplus/config.py.
+
+[server]
+port = 8080
+token = ""            # set it if the LAN isn't trusted (Bearer token / ?token=)
+
+[camera]
+source = "http://alarmcam.local:81/stream"   # ESP32-CAM; or "0" for a USB/Pi camera
+
+[smile]
+threshold = 0.5       # lower = easier to dismiss
+hold_seconds = 2.5
+
+[audio]
+backend = "local"     # local | moode | both
+ramp_seconds = 45
+
+# Optional extra: Rpi3 with moOde Audio + speakers
+[moode]
+host = "moode.local"
+# url = "http://192.168.1.50:8080/sound/alarm.wav"   # default: built-in tone served by this app
+
+[ring]
+max_minutes = 15
+allow_manual_dismiss = false
+
+[events]
+# OpenClaw (or any) webhook receiving {"source","event","alarm",...}
+webhook_url = ""

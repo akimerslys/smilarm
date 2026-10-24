@@ -1,0 +1,5 @@
+aiohttp>=3.9
+opencv-python-headless>=4.9
+numpy
+mediapipe>=0.10.14
+pytest
