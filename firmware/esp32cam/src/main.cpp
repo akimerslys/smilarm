@@ -32,13 +32,16 @@ static const char *BOUNDARY = "\r\n--frame\r\n";
 static esp_err_t stream_handler(httpd_req_t *req) {
   httpd_resp_set_type(req, "multipart/x-mixed-replace;boundary=frame");
   char hdr[64];
+  // Boundary goes right AFTER each frame (not before the next one), so the client sees a frame as
+  // complete the moment it is sent instead of one frame later.
+  if (httpd_resp_send_chunk(req, BOUNDARY, strlen(BOUNDARY)) != ESP_OK) return ESP_FAIL;
   while (true) {
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) return ESP_FAIL;
     size_t n = snprintf(hdr, sizeof hdr, "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
-    esp_err_t r = httpd_resp_send_chunk(req, BOUNDARY, strlen(BOUNDARY));
-    if (r == ESP_OK) r = httpd_resp_send_chunk(req, hdr, n);
+    esp_err_t r = httpd_resp_send_chunk(req, hdr, n);
     if (r == ESP_OK) r = httpd_resp_send_chunk(req, (const char *)fb->buf, fb->len);
+    if (r == ESP_OK) r = httpd_resp_send_chunk(req, BOUNDARY, strlen(BOUNDARY));
     esp_camera_fb_return(fb);
     if (r != ESP_OK) return r;  // client left
   }

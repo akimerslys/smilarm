@@ -6,7 +6,11 @@ import time
 import urllib.request
 from urllib.parse import urlparse
 
-os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "fflags;nobuffer|flags;low_delay|probesize;32768|analyzeduration;0")
+# rw_timeout/timeout (us): a stalled TCP stream must fail and reconnect instead of blocking read() forever
+os.environ.setdefault(
+    "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+    "fflags;nobuffer|flags;low_delay|probesize;32768|analyzeduration;0|rw_timeout;4000000|timeout;4000000",
+)
 import cv2  # noqa: E402
 
 log = logging.getLogger("camera")
@@ -35,6 +39,9 @@ class Camera:
         self._stop: threading.Event | None = None
         self._frame = None
         self._ts = 0.0
+        self._n = self._reconnects = 0
+        self._fps = 0.0
+        self._t_open = 0.0
 
     def acquire(self):
         with self._lock:
@@ -42,6 +49,8 @@ class Camera:
             if self._refs == 1:
                 self._stop = threading.Event()
                 self._frame, self._ts = None, 0.0
+                self._n = self._reconnects = 0
+                self._fps, self._t_open = 0.0, time.monotonic()
                 threading.Thread(target=self._run, args=(self._stop,), daemon=True).start()
 
     def release(self):
@@ -52,6 +61,16 @@ class Camera:
 
     def latest(self):
         return self._frame, self._ts
+
+    def stats(self) -> dict:
+        """Camera-side health, independent of detection (for /api/debug)."""
+        now = time.monotonic()
+        return {
+            "cam_fps": round(self._fps, 1),
+            "cam_frame_age_ms": round((now - self._ts) * 1000) if self._ts else None,
+            "cam_frames": self._n,
+            "cam_reconnects": self._reconnects,
+        }
 
     def _configure(self):
         url = control_url(self.source, self.quality)
@@ -75,6 +94,7 @@ class Camera:
                 if fails >= 3:
                     cap.release()
                     cap, fails = None, 0
+                    self._reconnects += 1
                     log.warning("camera read failed, retrying in %.0fs", backoff)
                     stop.wait(backoff)
                     backoff = min(backoff * 2, 10.0)  # don't spam when the camera is off
@@ -83,6 +103,9 @@ class Camera:
             h, w = f.shape[:2]
             if w > self.width:
                 f = cv2.resize(f, (self.width, h * self.width // w), interpolation=cv2.INTER_AREA)
-            self._frame, self._ts = f, time.monotonic()
+            now = time.monotonic()
+            if self._ts:
+                self._fps = 0.9 * self._fps + 0.1 / max(now - self._ts, 1e-3)
+            self._frame, self._ts, self._n = f, now, self._n + 1
         if cap:
             cap.release()

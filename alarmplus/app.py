@@ -83,14 +83,19 @@ def build(cfg) -> web.Application:
     def debug_info():
         s = cfg.smile
         st = dict(probe["stats"])
-        stale = time.monotonic() - st.pop("updated", 0) if probe["active"] else None
+        now = time.monotonic()
+        det_age = now - st.pop("updated", now) if probe["active"] else None
+        cs = cam.stats()
+        cam_stale = cs["cam_frame_age_ms"] is None or cs["cam_frame_age_ms"] > 3000
         return {
             "threshold": s.threshold, "hold_seconds": s.hold_seconds, "fps": s.fps,
             "backend": type(engine.detector).__name__ if engine.detector else None,
             "camera_source": str(cam.source), "quality": cam.quality, "detect_width": cam.width,
             "ringing": engine.ringing, "test_active": probe["active"],
-            "no_frames": bool(probe["active"] and stale is not None and stale > 3),
-            **st,
+            # tells the two stalls apart: camera not delivering vs. detector not answering
+            "no_frames": bool(probe["active"] and cam_stale and (det_age or 0) > 3),
+            "detector_stalled": bool(probe["active"] and not cam_stale and det_age is not None and det_age > 3),
+            **cs, **st,
         }
 
     @r.get("/api/debug")
@@ -99,11 +104,12 @@ def build(cfg) -> web.Application:
 
     @r.get("/api/smile-test.mjpg")
     async def smile_test(req):
-        """Live annotated camera view + smile score; numbers are polled from /api/debug."""
+        """Live annotated camera view. Streaming runs at camera speed; detection runs beside it on
+        the newest frame, so a slow detector never makes the picture lag. Numbers: /api/debug."""
         if engine.ringing or probe["active"]:
             raise web.HTTPConflict(text="alarm ringing or smile test already running")
         probe["active"] = True
-        probe["stats"] = {}
+        probe["stats"] = {"updated": time.monotonic()}
         try:
             if engine.detector is None:
                 await engine.preload()
@@ -111,35 +117,50 @@ def build(cfg) -> web.Application:
             await resp.prepare(req)
             sm = cfg.smile
             gate, loop = SmileGate(sm.threshold, sm.hold_seconds), asyncio.get_running_loop()
-            cam.acquire()
-            last, fps = 0.0, 0.0
-            try:
+            verdict = {"score": None, "progress": 0.0}
+
+            async def detect():
+                last, fps = 0.0, 0.0
                 while True:
                     f, ts = cam.latest()
                     if f is None or ts == last:
-                        await asyncio.sleep(0.03)
+                        await asyncio.sleep(0.02)
                         continue
-                    last = ts
-                    t0 = time.monotonic()
+                    last, t0 = ts, time.monotonic()
                     score = await loop.run_in_executor(None, engine.detector.score, f)
                     now = time.monotonic()
-                    infer = now - t0
                     gate.update(score, now)
-                    fps = 1 / max(now - probe["stats"].get("updated", now - 1), 1e-3) * 0.3 + fps * 0.7
+                    prev = probe["stats"].get("updated", now - 1)
+                    fps = 0.7 * fps + 0.3 / max(now - prev, 1e-3)
+                    verdict.update(score=score, progress=gate.progress)
                     probe["stats"] = {
                         "updated": now, "face": score is not None,
                         "score": None if score is None else round(score, 3),
                         "smiling": score is not None and score >= sm.threshold,
                         "progress": round(gate.progress, 2), "would_dismiss": gate.progress >= 1.0,
-                        "infer_ms": round(infer * 1000, 1), "detect_fps": round(fps, 1),
-                        "frame_age_ms": round((now - ts) * 1000), "frame_size": f"{f.shape[1]}x{f.shape[0]}",
+                        "infer_ms": round((now - t0) * 1000, 1), "detect_fps": round(fps, 1),
+                        "detect_frame_age_ms": round((t0 - ts) * 1000), "frame_size": f"{f.shape[1]}x{f.shape[0]}",
                     }
-                    _, jpg = cv2.imencode(".jpg", annotate(f.copy(), score, sm.threshold, gate.progress), [cv2.IMWRITE_JPEG_QUALITY, 70])
-                    await resp.write(b"--f\r\nContent-Type: image/jpeg\r\n\r\n" + jpg.tobytes() + b"\r\n")
                     await asyncio.sleep(max(0.0, 1 / sm.fps - (time.monotonic() - t0)))
+
+            cam.acquire()
+            task = asyncio.create_task(detect())
+            try:
+                last = 0.0
+                while True:
+                    f, ts = cam.latest()
+                    if f is None or ts == last:
+                        await asyncio.sleep(0.01)
+                        continue
+                    last, t0 = ts, time.monotonic()
+                    img = annotate(f.copy(), verdict["score"], sm.threshold, verdict["progress"])
+                    _, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    await resp.write(b"--f\r\nContent-Type: image/jpeg\r\n\r\n" + jpg.tobytes() + b"\r\n")
+                    await asyncio.sleep(max(0.0, 1 / 15 - (time.monotonic() - t0)))  # cap the view at 15 fps
             except (ConnectionResetError, asyncio.CancelledError):
                 pass
             finally:
+                task.cancel()
                 cam.release()
             return resp
         finally:

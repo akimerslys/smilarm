@@ -71,11 +71,13 @@ function setMode(m){
 $('cam').onclick=()=>setMode('cam');$('st').onclick=()=>setMode('st');
 
 const ROWS=[['smile score','score'],['threshold','threshold'],['hold progress','progress'],['would dismiss','would_dismiss'],['face found','face'],
- ['detector','backend'],['inference ms','infer_ms'],['detect fps','detect_fps'],['frame age ms','frame_age_ms'],['frame size','frame_size'],
+ ['detector','backend'],['inference ms','infer_ms'],['detect fps','detect_fps'],['detect frame age ms','detect_frame_age_ms'],['frame size','frame_size'],
+ ['camera fps','cam_fps'],['camera frame age ms','cam_frame_age_ms'],['camera reconnects','cam_reconnects'],['camera frames','cam_frames'],
  ['quality preset','quality'],['detect width','detect_width'],['hold seconds','hold_seconds'],['camera','camera_source'],['alarm ringing','ringing']];
 async function pollDebug(){
  const r=await fetch(q('/api/debug'));if(!r.ok)return;const d=await r.json(),v=$('verdict');
  if(d.no_frames){v.className='none';v.textContent='⏳ waiting for camera…'}
+ else if(d.detector_stalled){v.className='none';v.textContent='⏳ detector not answering'}
  else if(!d.face){v.className='none';v.textContent='❓ no face'}
  else if(d.smiling){v.className='smile';v.textContent='😁 SMILING'}
  else{v.className='no';v.textContent='😐 not smiling'}
