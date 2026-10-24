@@ -20,7 +20,7 @@ def build(cfg) -> web.Application:
     store = Store(data / "alarms.json")
     builtin = data / "alarm.wav"
     audio = Audio(cfg, builtin)
-    cam = Camera(cfg.camera.source, cfg.camera.width)
+    cam = Camera(cfg.camera.source, cfg.camera.quality, cfg.camera.width)
     engine = Engine(cfg, store, audio, cam)
 
     @web.middleware

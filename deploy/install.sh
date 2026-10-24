@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-sudo apt-get install -y --no-install-recommends python3-venv mpv
+sudo apt-get install -y --no-install-recommends python3-venv mpv libgl1 libgles2 libegl1
 python3 -m venv .venv
 .venv/bin/pip install -q -r requirements.txt
 

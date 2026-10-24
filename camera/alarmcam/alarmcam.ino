@@ -1,6 +1,6 @@
 // AI Thinker ESP32-CAM: QVGA MJPEG streamer.
 //   :81/stream  multipart MJPEG (encodes only while a client is connected)
-//   :80/capture single JPEG      :80/health  "ok"
+//   :80/capture single JPEG   :80/health "ok"   :80/control?preset=low|medium|high
 // The camera does no vision work: all smile detection runs on the Raspberry Pi.
 #include <Arduino.h>
 #include <ESPmDNS.h>
@@ -53,6 +53,24 @@ static esp_err_t capture_handler(httpd_req_t *req) {
   return r;
 }
 
+// /control?preset=low|medium|high  -> resolution + JPEG quality (the Pi sets it before streaming)
+static esp_err_t control_handler(httpd_req_t *req) {
+  char q[64], v[16];
+  if (httpd_req_get_url_query_str(req, q, sizeof q) != ESP_OK ||
+      httpd_query_key_value(q, "preset", v, sizeof v) != ESP_OK)
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "preset=low|medium|high");
+  framesize_t fs;
+  int quality;
+  if (!strcmp(v, "low")) { fs = FRAMESIZE_QVGA; quality = 12; }          // 320x240
+  else if (!strcmp(v, "medium")) { fs = FRAMESIZE_VGA; quality = 12; }   // 640x480
+  else if (!strcmp(v, "high")) { fs = FRAMESIZE_SVGA; quality = 10; }    // 800x600
+  else return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "preset=low|medium|high");
+  sensor_t *s = esp_camera_sensor_get();
+  s->set_framesize(s, fs);
+  s->set_quality(s, quality);
+  return httpd_resp_send(req, "ok", 2);
+}
+
 static esp_err_t health_handler(httpd_req_t *req) { return httpd_resp_send(req, "ok", 2); }
 
 static void start_servers() {
@@ -60,10 +78,12 @@ static void start_servers() {
   c.server_port = 80;
   httpd_uri_t cap = {"/capture", HTTP_GET, capture_handler, nullptr};
   httpd_uri_t hl = {"/health", HTTP_GET, health_handler, nullptr};
+  httpd_uri_t ctl = {"/control", HTTP_GET, control_handler, nullptr};
   httpd_handle_t h = nullptr;
   if (httpd_start(&h, &c) == ESP_OK) {
     httpd_register_uri_handler(h, &cap);
     httpd_register_uri_handler(h, &hl);
+    httpd_register_uri_handler(h, &ctl);
   }
   c.server_port = 81;
   c.ctrl_port += 1;

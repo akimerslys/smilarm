@@ -3,17 +3,33 @@ import logging
 import os
 import threading
 import time
+import urllib.request
+from urllib.parse import urlparse
 
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "fflags;nobuffer|flags;low_delay|probesize;32768|analyzeduration;0")
 import cv2  # noqa: E402
 
 log = logging.getLogger("camera")
 
+# preset -> detection width (the ESP32 side resolution is chosen by the same name in firmware)
+PRESETS = {"low": 320, "medium": 480, "high": 640}
+
+
+def control_url(source, quality: str) -> str | None:
+    """ESP32-CAM /control endpoint for an http stream source; None for local cameras."""
+    u = urlparse(str(source))
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return None
+    return f"http://{u.hostname}/control?preset={quality}"
+
 
 class Camera:
-    def __init__(self, source: str, width: int):
+    def __init__(self, source: str, quality: str = "low", width: int = 0):
+        if quality not in PRESETS:
+            raise ValueError(f"camera.quality must be one of {sorted(PRESETS)}")
         self.source = int(source) if str(source).isdigit() else source
-        self.width = width
+        self.quality = quality
+        self.width = width or PRESETS[quality]
         self._refs = 0
         self._lock = threading.Lock()
         self._stop: threading.Event | None = None
@@ -37,7 +53,17 @@ class Camera:
     def latest(self):
         return self._frame, self._ts
 
+    def _configure(self):
+        url = control_url(self.source, self.quality)
+        if not url:
+            return
+        try:
+            urllib.request.urlopen(url, timeout=3).read()
+        except Exception as e:  # old firmware without /control: stream still works at its default
+            log.warning("could not set camera preset %s: %s", self.quality, e)
+
     def _run(self, stop: threading.Event):
+        self._configure()
         cap, fails = None, 0
         while not stop.is_set():
             if cap is None:

@@ -1,4 +1,5 @@
 """Config: TOML file merged over defaults, exposed with attribute access."""
+import copy
 import tomllib
 from pathlib import Path
 
@@ -7,7 +8,10 @@ DEFAULTS = {
     "camera": {
         # ESP32-CAM stream URL, or a local device index ("0") for a USB/Pi camera.
         "source": "http://alarmcam.local:81/stream",
-        "width": 320,
+        # low = 320x240 (default, lightest) | medium = 640x480 | high = 800x600.
+        # Sets the ESP32 resolution and the size frames are downscaled to for detection.
+        "quality": "low",
+        "width": 0,  # 0 = take it from the preset; set a number to override
     },
     "smile": {
         "backend": "auto",  # auto | mediapipe | haar
@@ -59,4 +63,4 @@ def load(path: str | None) -> Cfg:
     user = {}
     if path and Path(path).exists():
         user = tomllib.loads(Path(path).read_text(encoding="utf-8"))
-    return Cfg(_merge(DEFAULTS, user))
+    return Cfg(_merge(copy.deepcopy(DEFAULTS), user))
