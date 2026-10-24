@@ -90,3 +90,60 @@ def test_sse_first_event_is_snapshot(tmp_path):
 
     snap = run(go, tmp_path)
     assert snap["state"] == "idle" and snap["next"]["at"].endswith("07:00")
+
+
+def test_debug_and_smile_test(tmp_path):
+    import numpy as np
+
+    from alarmplus.app import CAM, ENGINE
+
+    class Cam:  # stands in for the camera thread's output; patched onto the real instance
+        n = 0
+
+        def acquire(self):
+            pass
+
+        def release(self):
+            pass
+
+        def latest(self):
+            self.n += 1
+            return np.zeros((240, 320, 3), np.uint8), float(self.n) * 1e9  # always "new"
+
+    class Det:
+        def score(self, _):
+            return 0.9
+
+    cfg = config.load(None)
+    cfg._d["data_dir"] = str(tmp_path)
+    cfg._d["smile"]["hold_seconds"] = 0.3
+
+    async def fake_preload():
+        app[ENGINE].detector = Det()
+
+    app = build(cfg)
+    app[ENGINE].preload = fake_preload
+    fake = Cam()
+    cam = app[CAM]
+    cam.acquire, cam.release, cam.latest = fake.acquire, fake.release, fake.latest
+
+    async def main():
+        async with TestClient(TestServer(app)) as cl:
+            d = await (await cl.get("/api/debug")).json()
+            assert d["threshold"] == 0.5 and d["test_active"] is False and "score" not in d
+            r = await cl.get("/api/smile-test.mjpg")
+            assert r.status == 200
+            assert b"image/jpeg" in await asyncio.wait_for(r.content.readuntil(b"\r\n\r\n"), 3)  # headers
+            await asyncio.wait_for(r.content.readexactly(2), 3)
+            await asyncio.sleep(0.6)
+            d = await (await cl.get("/api/debug")).json()
+            assert d["test_active"] and d["face"] and d["smiling"] and d["score"] == 0.9
+            assert d["would_dismiss"] is True and d["frame_size"] == "320x240" and d["backend"] == "Det"
+            assert (await cl.get("/api/smile-test.mjpg")).status == 409  # one test at a time
+            r.close()
+            await asyncio.sleep(0.2)
+            app[ENGINE].ringing = True
+            assert (await cl.get("/api/smile-test.mjpg")).status == 409  # never while ringing
+            app[ENGINE].ringing = False
+
+    asyncio.run(main())

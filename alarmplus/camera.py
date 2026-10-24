@@ -64,7 +64,7 @@ class Camera:
 
     def _run(self, stop: threading.Event):
         self._configure()
-        cap, fails = None, 0
+        cap, fails, backoff = None, 0, 1.0
         while not stop.is_set():
             if cap is None:
                 cap = cv2.VideoCapture(self.source)
@@ -75,10 +75,11 @@ class Camera:
                 if fails >= 3:
                     cap.release()
                     cap, fails = None, 0
-                    log.warning("camera read failed, reconnecting")
-                    stop.wait(1.0)
+                    log.warning("camera read failed, retrying in %.0fs", backoff)
+                    stop.wait(backoff)
+                    backoff = min(backoff * 2, 10.0)  # don't spam when the camera is off
                 continue
-            fails = 0
+            fails, backoff = 0, 1.0
             h, w = f.shape[:2]
             if w > self.width:
                 f = cv2.resize(f, (self.width, h * self.width // w), interpolation=cv2.INTER_AREA)

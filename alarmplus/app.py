@@ -2,6 +2,7 @@
 import asyncio
 import hmac
 import json
+import time
 from pathlib import Path
 
 import cv2
@@ -10,9 +11,29 @@ from aiohttp import web
 from .audio import Audio
 from .camera import Camera
 from .engine import Engine
+from .smile import SmileGate
 from .store import Store
 
 WEB = Path(__file__).resolve().parent.parent / "web"
+TASKS = web.AppKey("tasks", list)
+ENGINE = web.AppKey("engine", Engine)
+CAM = web.AppKey("cam", Camera)
+
+
+def annotate(img, score, thr, progress):
+    """Draw the smile verdict on a frame (green = smiling, red = not, grey = no face)."""
+    h, w = img.shape[:2]
+    if score is None:
+        col, txt = (160, 160, 160), "NO FACE"
+    elif score >= thr:
+        col, txt = (60, 200, 60), f"SMILING {score:.2f}"
+    else:
+        col, txt = (60, 60, 230), f"not smiling {score:.2f}"
+    cv2.rectangle(img, (0, 0), (w - 1, h - 1), col, 4)
+    cv2.putText(img, txt, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 4)
+    cv2.putText(img, txt, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, col, 2)
+    cv2.rectangle(img, (0, h - 10), (int(w * progress), h), col, -1)
+    return img
 
 
 def build(cfg) -> web.Application:
@@ -22,6 +43,7 @@ def build(cfg) -> web.Application:
     audio = Audio(cfg, builtin)
     cam = Camera(cfg.camera.source, cfg.camera.quality, cfg.camera.width)
     engine = Engine(cfg, store, audio, cam)
+    probe = {"active": False, "stats": {}}
 
     @web.middleware
     async def auth(request, handler):
@@ -57,6 +79,71 @@ def build(cfg) -> web.Application:
     @r.get("/api/state")
     async def state(_):
         return web.json_response({**engine.snapshot(), "alarms": store.alarms})
+
+    def debug_info():
+        s = cfg.smile
+        st = dict(probe["stats"])
+        stale = time.monotonic() - st.pop("updated", 0) if probe["active"] else None
+        return {
+            "threshold": s.threshold, "hold_seconds": s.hold_seconds, "fps": s.fps,
+            "backend": type(engine.detector).__name__ if engine.detector else None,
+            "camera_source": str(cam.source), "quality": cam.quality, "detect_width": cam.width,
+            "ringing": engine.ringing, "test_active": probe["active"],
+            "no_frames": bool(probe["active"] and stale is not None and stale > 3),
+            **st,
+        }
+
+    @r.get("/api/debug")
+    async def debug(_):
+        return web.json_response(debug_info())
+
+    @r.get("/api/smile-test.mjpg")
+    async def smile_test(req):
+        """Live annotated camera view + smile score; numbers are polled from /api/debug."""
+        if engine.ringing or probe["active"]:
+            raise web.HTTPConflict(text="alarm ringing or smile test already running")
+        probe["active"] = True
+        probe["stats"] = {}
+        try:
+            if engine.detector is None:
+                await engine.preload()
+            resp = web.StreamResponse(headers={"Content-Type": "multipart/x-mixed-replace; boundary=f", "Cache-Control": "no-cache"})
+            await resp.prepare(req)
+            sm = cfg.smile
+            gate, loop = SmileGate(sm.threshold, sm.hold_seconds), asyncio.get_running_loop()
+            cam.acquire()
+            last, fps = 0.0, 0.0
+            try:
+                while True:
+                    f, ts = cam.latest()
+                    if f is None or ts == last:
+                        await asyncio.sleep(0.03)
+                        continue
+                    last = ts
+                    t0 = time.monotonic()
+                    score = await loop.run_in_executor(None, engine.detector.score, f)
+                    now = time.monotonic()
+                    infer = now - t0
+                    gate.update(score, now)
+                    fps = 1 / max(now - probe["stats"].get("updated", now - 1), 1e-3) * 0.3 + fps * 0.7
+                    probe["stats"] = {
+                        "updated": now, "face": score is not None,
+                        "score": None if score is None else round(score, 3),
+                        "smiling": score is not None and score >= sm.threshold,
+                        "progress": round(gate.progress, 2), "would_dismiss": gate.progress >= 1.0,
+                        "infer_ms": round(infer * 1000, 1), "detect_fps": round(fps, 1),
+                        "frame_age_ms": round((now - ts) * 1000), "frame_size": f"{f.shape[1]}x{f.shape[0]}",
+                    }
+                    _, jpg = cv2.imencode(".jpg", annotate(f.copy(), score, sm.threshold, gate.progress), [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    await resp.write(b"--f\r\nContent-Type: image/jpeg\r\n\r\n" + jpg.tobytes() + b"\r\n")
+                    await asyncio.sleep(max(0.0, 1 / sm.fps - (time.monotonic() - t0)))
+            except (ConnectionResetError, asyncio.CancelledError):
+                pass
+            finally:
+                cam.release()
+            return resp
+        finally:
+            probe["active"] = False
 
     @r.post("/api/alarms")
     async def add(req):
@@ -132,15 +219,16 @@ def build(cfg) -> web.Application:
         return resp
 
     async def on_start(app):
-        app["tasks"] = [asyncio.create_task(engine.preload()), asyncio.create_task(engine.run())]
+        app[TASKS] = [asyncio.create_task(engine.preload()), asyncio.create_task(engine.run())]
 
     async def on_stop(app):
-        for t in app["tasks"]:
+        for t in app[TASKS]:
             t.cancel()
         await audio.stop()
         await engine.close()
 
     app = web.Application(middlewares=[auth])
+    app[ENGINE], app[CAM] = engine, cam
     app.add_routes(r)
     app.on_startup.append(on_start)
     app.on_cleanup.append(on_stop)

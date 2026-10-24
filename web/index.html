@@ -1,52 +1,87 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Alarm+</title>
 <style>
-:root{--bg:#fff;--fg:#1a1a1a;--mut:#777;--card:#f3f3f5;--acc:#e8590c;--ok:#2b8a3e}
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#777;--card:#f3f3f5;--acc:#e8590c;--ok:#2b8a3e;--bad:#d9480f}
 @media(prefers-color-scheme:dark){:root{--bg:#121214;--fg:#eee;--mut:#999;--card:#1e1e22}}
 *{box-sizing:border-box}body{margin:0 auto;max-width:520px;padding:16px;background:var(--bg);color:var(--fg);font:16px system-ui,sans-serif}
 h1{font-size:20px;margin:0 0 12px}.card{background:var(--card);border-radius:12px;padding:12px;margin:10px 0}
-.row{display:flex;align-items:center;gap:10px;justify-content:space-between}.t{font-size:32px;font-weight:600}.mut{color:var(--mut);font-size:14px}
-button{font:inherit;border:0;border-radius:8px;padding:8px 14px;background:var(--acc);color:#fff}button.g{background:transparent;color:var(--mut);border:1px solid var(--mut)}
+.row{display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap}.t{font-size:32px;font-weight:600}.mut{color:var(--mut);font-size:14px}
+button{font:inherit;border:0;border-radius:8px;padding:8px 14px;background:var(--acc);color:#fff}button.g{background:transparent;color:var(--mut);border:1px solid var(--mut)}button.on{background:var(--ok);color:#fff;border-color:var(--ok)}
 input[type=time],input[type=text]{font:inherit;padding:8px;border-radius:8px;border:1px solid var(--mut);background:var(--bg);color:var(--fg)}
 .days label{display:inline-block;margin:2px 6px 2px 0;font-size:14px}
-#ring{display:none;border:2px solid var(--acc)}#bar{height:10px;border-radius:5px;background:var(--bg);overflow:hidden;margin-top:8px}#bar i{display:block;height:100%;width:0;background:var(--ok);transition:width .2s}
+#ring{display:none;border:2px solid var(--acc)}.bar{height:10px;border-radius:5px;background:var(--bg);overflow:hidden;margin-top:8px}.bar i{display:block;height:100%;width:0;background:var(--ok);transition:width .2s}
 img{width:100%;border-radius:8px;display:none;margin-top:8px}
+#verdict{font-size:22px;font-weight:600;text-align:center;padding:10px;border-radius:8px;background:var(--bg);margin-top:8px}
+#verdict.smile{color:var(--ok)}#verdict.no{color:var(--bad)}#verdict.none{color:var(--mut)}
+table{width:100%;border-collapse:collapse;font:13px ui-monospace,monospace;margin-top:8px}td{padding:2px 4px;border-top:1px solid var(--bg)}td:last-child{text-align:right}
+#err{color:var(--bad);font-size:14px}
 </style></head><body>
 <h1>⏰ Alarm+ <span class="mut" id="next"></span></h1>
 
-<div class="card" id="ring"><b>🔔 Звенит! Улыбнись в камеру 😁</b>
- <div class="mut" id="score"></div><div id="bar"><i></i></div>
- <button class="g" id="dis" style="display:none;margin-top:8px">Выключить (камера не отвечает)</button></div>
+<div class="card" id="ring"><b>🔔 Ringing! Smile at the camera 😁</b>
+ <div class="mut" id="score"></div><div class="bar"><i id="rbar"></i></div>
+ <button class="g" id="dis" style="display:none;margin-top:8px">Dismiss (camera not responding)</button></div>
 
 <div id="list"></div>
 
-<div class="card"><div class="row"><input type="time" id="time" value="07:00"><input type="text" id="label" placeholder="Название" style="flex:1;min-width:0"></div>
+<div class="card"><div class="row" style="flex-wrap:nowrap"><input type="time" id="time" value="07:00"><input type="text" id="label" placeholder="Label" style="flex:1;min-width:0"></div>
  <div class="days" id="days" style="margin:8px 0"></div>
- <div class="row"><label><input type="checkbox" id="once"> один раз</label><button id="add">Добавить</button></div></div>
+ <div class="row"><label><input type="checkbox" id="once"> once</label><button id="add">Add alarm</button></div></div>
 
-<div class="row"><button class="g" id="test">Тест звонка</button><button class="g" id="cam">Камера</button><button class="g" id="tok">Токен</button></div>
+<div class="row"><button class="g" id="test">Test ring</button><button class="g" id="cam">Camera</button><button class="g" id="st">Smile test</button><button class="g" id="tok">Token</button></div>
+<div id="err"></div>
 <img id="prev" alt="">
+<div id="dbg" class="card" style="display:none">
+ <div id="verdict" class="none">…</div>
+ <div class="bar"><i id="tbar"></i></div>
+ <table id="tbl"></table>
+</div>
 
 <script>
-const $=id=>document.getElementById(id),DN=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
-let token=localStorage.getItem('tok')||'';
+const $=id=>document.getElementById(id),DN=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+let token=localStorage.getItem('tok')||'',mode='',dbgTimer=null;
 const q=u=>token?u+(u.includes('?')?'&':'?')+'token='+encodeURIComponent(token):u;
 async function api(m,u,b){const r=await fetch(q(u),{method:m,headers:{'Content-Type':'application/json'},body:b&&JSON.stringify(b)});
- if(r.status==401){token=prompt('Токен')||'';localStorage.setItem('tok',token);return api(m,u,b)}
- if(!r.ok)alert(await r.text());return r.ok&&r.json()}
+ if(r.status==401){token=prompt('Token')||'';localStorage.setItem('tok',token);return api(m,u,b)}
+ if(!r.ok){alert(await r.text());return false}return r.json()}
 $('days').innerHTML=DN.map((d,i)=>`<label><input type=checkbox value=${i}> ${d}</label>`).join('');
 function render(s){
  $('next').textContent=s.next?'→ '+s.next.at.replace('T',' '):'';
  const ring=s.state=='ringing';$('ring').style.display=ring?'block':'none';
- if(ring){$('score').textContent='улыбка: '+(s.score??'лицо не найдено');$('bar').firstChild.style.width=(s.progress*100)+'%';$('dis').style.display=s.degraded?'inline-block':'none'}
- if(s.alarms)$('list').innerHTML=s.alarms.map(a=>`<div class="card row"><div><div class="t">${a.time}</div><div class="mut">${a.label||''} ${a.days.length?a.days.map(d=>DN[d]).join(' '):'каждый день'}${a.once?' · раз':''}</div></div>
-  <div><input type=checkbox ${a.enabled?'checked':''} onchange="api('PUT','/api/alarms/${a.id}',{enabled:this.checked})"> <button class=g onclick="api('DELETE','/api/alarms/${a.id}').then(load)">✕</button></div></div>`).join('')}
+ if(ring){$('score').textContent='smile: '+(s.score??'no face found');$('rbar').style.width=(s.progress*100)+'%';$('dis').style.display=s.degraded?'inline-block':'none'}
+ if(s.alarms)$('list').innerHTML=s.alarms.map(a=>`<div class="card row"><div><div class="t">${a.time}</div><div class="mut">${a.label||''} ${a.days.length?a.days.map(d=>DN[d]).join(' '):'every day'}${a.once?' · once':''}</div></div>
+  <div><input type=checkbox ${a.enabled?'checked':''} onchange="api('PUT','/api/alarms/${a.id}',{enabled:this.checked}).then(load)"> <button class=g onclick="api('DELETE','/api/alarms/${a.id}').then(load)">✕</button></div></div>`).join('')}
 async function load(){const s=await api('GET','/api/state');s&&render(s)}
 $('add').onclick=async()=>{await api('POST','/api/alarms',{time:$('time').value,label:$('label').value,once:$('once').checked,days:[...$('days').querySelectorAll('input:checked')].map(i=>+i.value)});load()};
 $('test').onclick=()=>api('POST','/api/test');$('dis').onclick=()=>api('POST','/api/dismiss');
-$('tok').onclick=()=>{token=prompt('Токен',token)||'';localStorage.setItem('tok',token)};
-$('cam').onclick=()=>{const p=$('prev');p.style.display=p.style.display=='block'?'none':'block';p.src=p.style.display=='block'?q('/api/preview.mjpg'):''};
-let lastAlarms;load().then(()=>{const es=new EventSource(q('/api/events'));
+$('tok').onclick=()=>{token=prompt('Token',token)||'';localStorage.setItem('tok',token)};
+
+// camera views: '' (off) | 'cam' (plain preview) | 'st' (smile test with live debug values)
+function setMode(m){
+ mode=mode==m?'':m;const p=$('prev');
+ p.src='';clearInterval(dbgTimer);$('err').textContent='';
+ $('cam').classList.toggle('on',mode=='cam');$('st').classList.toggle('on',mode=='st');
+ p.style.display=mode?'block':'none';$('dbg').style.display=mode=='st'?'block':'none';
+ if(!mode)return;
+ p.onerror=()=>{if(mode){$('err').textContent=mode=='st'?'Smile test unavailable: an alarm is ringing, another test is running, or the camera is unreachable.':'Camera unavailable.';p.style.display='none'}};
+ p.onload=()=>{$('err').textContent=''};
+ p.src=q(mode=='st'?'/api/smile-test.mjpg':'/api/preview.mjpg');
+ if(mode=='st'){pollDebug();dbgTimer=setInterval(pollDebug,300)}}
+$('cam').onclick=()=>setMode('cam');$('st').onclick=()=>setMode('st');
+
+const ROWS=[['smile score','score'],['threshold','threshold'],['hold progress','progress'],['would dismiss','would_dismiss'],['face found','face'],
+ ['detector','backend'],['inference ms','infer_ms'],['detect fps','detect_fps'],['frame age ms','frame_age_ms'],['frame size','frame_size'],
+ ['quality preset','quality'],['detect width','detect_width'],['hold seconds','hold_seconds'],['camera','camera_source'],['alarm ringing','ringing']];
+async function pollDebug(){
+ const r=await fetch(q('/api/debug'));if(!r.ok)return;const d=await r.json(),v=$('verdict');
+ if(d.no_frames){v.className='none';v.textContent='⏳ waiting for camera…'}
+ else if(!d.face){v.className='none';v.textContent='❓ no face'}
+ else if(d.smiling){v.className='smile';v.textContent='😁 SMILING'}
+ else{v.className='no';v.textContent='😐 not smiling'}
+ $('tbar').style.width=((d.progress||0)*100)+'%';
+ $('tbl').innerHTML=ROWS.map(([n,k])=>`<tr><td>${n}</td><td>${d[k]===undefined||d[k]===null?'–':d[k]}</td></tr>`).join('')}
+
+load().then(()=>{const es=new EventSource(q('/api/events'));
  es.onmessage=e=>{const s=JSON.parse(e.data);render(s);if(s.state=='idle'&&s.next!==undefined)load()}});
 </script></body></html>

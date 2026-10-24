@@ -26,14 +26,16 @@ ESP32-CAM ──MJPEG──▶ Rpi5: alarmplus (schedule + smile detection + sou
 cd firmware/esp32cam/src && cp secrets.h.example secrets.h   # enter your Wi-Fi
 cd .. && pio run -t upload
 ```
-Check `http://alarmcam.local:81/stream`.
+Check `http://alarmcam.local:81/stream`. (The Arduino IDE works too: put `main.cpp` and `secrets.h` in a sketch folder, board "AI Thinker ESP32-CAM", PSRAM enabled.)
 
 **2. Rpi5:**
 ```bash
 git clone <repo> alarm+ && cd alarm+ && bash deploy/install.sh
 nano config.toml    # camera.source etc.
 ```
-Web UI: `http://<rpi5>.local:8080` — add an alarm, “Camera” button (preview, handy for aiming), “Test ring”.
+Prefer the camera's IP address in `camera.source` (e.g. `http://10.9.141.122:81/stream`): `.local` names often don't resolve on the Pi. Reserve that IP in your router.
+
+Web UI: `http://<rpi5>.local:8080` — alarms, “Test ring”, “Camera” (plain live view, handy for aiming) and “Smile test” (live view with a smiling / not-smiling frame plus a table of debug values: score, threshold, progress, fps, frame age, …). The same values are available as JSON at `/api/debug`.
 
 **3. Rpi3 + moOde (optional):** in `config.toml` set `audio.backend = "moode"` (or `"both"`) and `moode.host = "<rpi3>"`. moOde's MPD listens on port 6600 by default. The Rpi3 fetches the sound over HTTP from the Rpi5 (`/sound/alarm.wav`) — or set your own `moode.url` (e.g. an internet radio stream).
 
@@ -49,7 +51,7 @@ The agent manages alarms through the REST API (see `openclaw/skills/alarm-plus/S
 - On an untrusted network, set `server.token`.
 
 ## Tests
-`python -m pytest tests` (schedule logic, the “smile gate”, the MPD client against a fake server).
+`python -m pytest tests` — schedule logic, the smile gate, the ring loop with fake camera/audio/detector, the REST API, the MPD client against a fake server, config and camera presets.
 
 ## Not verified
-The code has only been checked with unit tests and an API smoke test on Windows. It has not been run on hardware: the ESP32 firmware has not been compiled, mediapipe/mpv on the Pi 5 have not been tried, and `smile.threshold = 0.5` should be tuned to your lighting.
+Unit tests run on Windows and on a Raspberry Pi 5 (install, MediaPipe backend loading). Not yet verified end to end: the real smile-to-dismiss flow on hardware, sound through `mpv`, and the Rpi3/moOde path. Tune `smile.threshold = 0.5` to your lighting — the “Smile test” view shows the live score.
