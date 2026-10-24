@@ -6,6 +6,7 @@ token = ""            # set it if the LAN isn't trusted (Bearer token / ?token=)
 
 [camera]
 source = "http://alarmcam.local:81/stream"   # ESP32-CAM; or "0" for a USB/Pi camera
+rotate = 0           # 0 | 90 | 180 | 270 clockwise: use 90 or 270 if the camera is mounted sideways
 quality = "low"       # low 320x240 | medium 640x480 | high 800x600 (more detail, more CPU/Wi-Fi)
 
 [smile]

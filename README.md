@@ -33,6 +33,8 @@ Check `http://alarmcam.local:81/stream`. (The Arduino IDE works too: put `main.c
 git clone <repo> alarm+ && cd alarm+ && bash deploy/install.sh
 nano config.toml    # camera.source etc.
 ```
+If the camera is mounted sideways or upside down, set `camera.rotate` (0/90/180/270, clockwise; try 90, else 270) and check the result in **Smile test**. The detector only works on upright faces.
+
 Prefer the camera's IP address in `camera.source` (e.g. `http://10.9.141.122:81/stream`): `.local` names often don't resolve on the Pi. Reserve that IP in your router.
 
 Web UI: `http://<rpi5>.local:8080` — alarms, “Test ring”, “Camera” (plain live view, handy for aiming) and “Smile test” (live view with a smiling / not-smiling frame plus a table of debug values: score, threshold, progress, fps, frame age, …). The same values are available as JSON at `/api/debug`.

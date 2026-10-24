@@ -95,7 +95,7 @@ $('cam').onclick=()=>setMode('cam');$('st').onclick=()=>setMode('st');
 const ROWS=[['smile score','score'],['threshold','threshold'],['hold progress','progress'],['would dismiss','would_dismiss'],['face found','face'],
  ['detector','backend'],['inference ms','infer_ms'],['detect fps','detect_fps'],['detect frame age ms','detect_frame_age_ms'],['frame size','frame_size'],
  ['camera fps','cam_fps'],['camera frame age ms','cam_frame_age_ms'],['camera reconnects','cam_reconnects'],['camera frames','cam_frames'],
- ['quality preset','quality'],['detect width','detect_width'],['hold seconds','hold_seconds'],['camera','camera_source'],['alarm ringing','ringing']];
+ ['quality preset','quality'],['rotate (deg)','rotate'],['detect width','detect_width'],['hold seconds','hold_seconds'],['camera','camera_source'],['alarm ringing','ringing']];
 async function pollDebug(){
  const r=await fetch(q('/api/debug'));if(!r.ok)return;const d=await r.json(),v=$('verdict');
  if(d.no_frames){v.className='none';v.textContent='⏳ waiting for camera…'}
@@ -147,7 +147,7 @@ async function loadSettings(){
 $('setd').ontoggle=()=>{if($('setd').open)loadSettings()};
 $('setsave').onclick=async()=>{
  const upd={};schema.filter(s=>!s.locked).forEach(s=>{const e=$('s_'+s.key.replace('.','_'));
-  const v=s.type=='bool'?e.checked:s.type=='int'||s.type=='float'?(e.value===''?NaN:+e.value):e.value;if(v!==s.value)upd[s.key]=v});
+  const v=s.type=='bool'?e.checked:s.type=='int'||s.type=='float'||(s.type=='choice'&&typeof s.choices[0]=='number')?(e.value===''?NaN:+e.value):e.value;if(v!==s.value)upd[s.key]=v});
  if(!Object.keys(upd).length){$('setmsg').textContent='Nothing changed.';return}
  const r=await fetch(q('/api/settings'),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(upd)});
  if(r.ok){$('setmsg').textContent='Saved. Camera/audio changes apply to the next alarm.';loadSettings()}

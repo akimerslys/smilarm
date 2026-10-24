@@ -203,3 +203,26 @@ def test_library_dir_setting_validation(tmp_path):
     for bad in ("/var/lib/mpd/music", "../etc"):
         with pytest.raises(ValueError):
             st.validate("moode.library_dir", bad)
+
+
+def test_camera_rotation_setting(tmp_path):
+    import numpy as np
+
+    from alarmplus import settings as st
+    from alarmplus.camera import ROTATIONS, Camera
+
+    assert sorted(ROTATIONS) == [0, 90, 180, 270]
+    assert Camera("0", rotate=90).rotate == 90
+    with pytest.raises(ValueError):
+        Camera("0", rotate=45)
+    c = Camera("0")
+    c.reconfigure("0", "low", 0, 270)
+    assert c.rotate == 270
+    assert st.validate("camera.rotate", 90) == 90
+    for bad in (45, "90", True):
+        with pytest.raises(ValueError):
+            st.validate("camera.rotate", bad)
+    import cv2
+
+    img = np.zeros((240, 320, 3), np.uint8)
+    assert cv2.rotate(img, ROTATIONS[90]).shape[:2] == (320, 240)  # landscape frame -> portrait

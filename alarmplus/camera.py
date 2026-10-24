@@ -17,6 +17,7 @@ log = logging.getLogger("camera")
 
 # preset -> detection width (the ESP32 side resolution is chosen by the same name in firmware)
 PRESETS = {"low": 320, "medium": 480, "high": 640}
+ROTATIONS = {0: None, 90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
 
 
 def control_url(source, quality: str) -> str | None:
@@ -28,12 +29,13 @@ def control_url(source, quality: str) -> str | None:
 
 
 class Camera:
-    def __init__(self, source: str, quality: str = "low", width: int = 0):
+    def __init__(self, source: str, quality: str = "low", width: int = 0, rotate: int = 0):
         if quality not in PRESETS:
             raise ValueError(f"camera.quality must be one of {sorted(PRESETS)}")
         self.source = int(source) if str(source).isdigit() else source
         self.quality = quality
         self.width = width or PRESETS[quality]
+        self.rotate = self._check_rotate(rotate)
         self._refs = 0
         self._lock = threading.Lock()
         self._stop: threading.Event | None = None
@@ -43,12 +45,19 @@ class Camera:
         self._fps = 0.0
         self._t_open = 0.0
 
-    def reconfigure(self, source, quality: str, width: int = 0):
+    @staticmethod
+    def _check_rotate(rotate: int) -> int:
+        if rotate not in ROTATIONS:
+            raise ValueError(f"camera.rotate must be one of {sorted(ROTATIONS)}")
+        return rotate
+
+    def reconfigure(self, source, quality: str, width: int = 0, rotate: int = 0):
         """Apply new settings; they take effect the next time the camera is opened."""
         if quality not in PRESETS:
             raise ValueError(f"camera.quality must be one of {sorted(PRESETS)}")
         self.source = int(source) if str(source).isdigit() else source
         self.quality, self.width = quality, width or PRESETS[quality]
+        self.rotate = self._check_rotate(rotate)
 
     def acquire(self):
         with self._lock:
@@ -110,6 +119,8 @@ class Camera:
             h, w = f.shape[:2]
             if w > self.width:
                 f = cv2.resize(f, (self.width, h * self.width // w), interpolation=cv2.INTER_AREA)
+            if ROTATIONS[self.rotate] is not None:
+                f = cv2.rotate(f, ROTATIONS[self.rotate])
             now = time.monotonic()
             if self._ts:
                 self._fps = 0.9 * self._fps + 0.1 / max(now - self._ts, 1e-3)

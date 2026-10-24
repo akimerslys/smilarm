@@ -28,6 +28,7 @@ SCHEMA = [
     _f("smile.hold_seconds", "float", "How long the smile must be held.", min=0.5, max=10, step=0.1),
     _f("smile.fps", "int", "Detections per second while ringing.", min=1, max=15),
     _f("camera.quality", "choice", "ESP32 resolution preset: low 320x240, medium 640x480, high 800x600.", choices=["low", "medium", "high"]),
+    _f("camera.rotate", "choice", "Rotate the picture clockwise so faces are upright (sideways camera: try 90, else 270).", choices=[0, 90, 180, 270]),
     _f("camera.source", "str", "ESP32 stream URL (http://IP:81/stream) or a local camera index like 0."),
     _f("audio.backend", "choice", "Where the alarm sound plays.", choices=["local", "moode", "both"]),
     _f("audio.volume_start", "int", "Starting volume, %.", min=0, max=100),
@@ -77,8 +78,8 @@ def validate(key: str, v):
             raise ValueError("must be true or false")
         return v
     if t == "choice":
-        if v not in spec["choices"]:
-            raise ValueError("must be one of " + ", ".join(spec["choices"]))
+        if isinstance(v, bool) or v not in spec["choices"]:
+            raise ValueError("must be one of " + ", ".join(map(str, spec["choices"])))
         return v
     if not isinstance(v, str) or "\0" in v:
         raise ValueError("must be text")

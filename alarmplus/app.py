@@ -52,8 +52,8 @@ def build(cfg) -> web.Application:
     store = Store(data / "alarms.json")
     builtin = data / "alarm.wav"
     audio = Audio(cfg, builtin)
-    cam = Camera(cfg.camera.source, cfg.camera.quality, cfg.camera.width)
-    settings.listeners.append(lambda: cam.reconfigure(cfg.camera.source, cfg.camera.quality, cfg.camera.width))
+    cam = Camera(cfg.camera.source, cfg.camera.quality, cfg.camera.width, cfg.camera.rotate)
+    settings.listeners.append(lambda: cam.reconfigure(cfg.camera.source, cfg.camera.quality, cfg.camera.width, cfg.camera.rotate))
     engine = Engine(cfg, store, audio, cam)
     probe = {"active": False, "stats": {}, "sound": False}
 
@@ -173,7 +173,7 @@ def build(cfg) -> web.Application:
         return {
             "threshold": s.threshold, "hold_seconds": s.hold_seconds, "fps": s.fps,
             "backend": type(engine.detector).__name__ if engine.detector else None,
-            "camera_source": str(cam.source), "quality": cam.quality, "detect_width": cam.width,
+            "camera_source": str(cam.source), "quality": cam.quality, "rotate": cam.rotate, "detect_width": cam.width,
             "ringing": engine.ringing, "test_active": probe["active"],
             # tells the two stalls apart: camera not delivering vs. detector not answering
             "no_frames": bool(probe["active"] and cam_stale and (det_age or 0) > 3),
