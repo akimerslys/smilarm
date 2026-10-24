@@ -1,9 +1,12 @@
 """aiohttp app: REST + SSE + MJPEG preview + static UI."""
 import asyncio
 import hmac
+import importlib.metadata as md
 import json
+import logging
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import cv2
 from aiohttp import web
@@ -11,13 +14,17 @@ from aiohttp import web
 from .audio import Audio
 from .camera import Camera
 from .engine import Engine
+from .settings import Settings
 from .smile import SmileGate
 from .store import Store
+from .sysinfo import LogBuffer, Sampler, tcp_ok
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 TASKS = web.AppKey("tasks", list)
 ENGINE = web.AppKey("engine", Engine)
 CAM = web.AppKey("cam", Camera)
+AUDIO = web.AppKey("audio", Audio)
+SETTINGS = web.AppKey("settings", Settings)
 
 
 def annotate(img, score, thr, progress):
@@ -38,12 +45,17 @@ def annotate(img, score, thr, progress):
 
 def build(cfg) -> web.Application:
     data = Path(cfg.data_dir)
+    settings = Settings(cfg, data / "settings.json")
+    logbuf, sampler, net = LogBuffer(), Sampler(cfg.data_dir), {"at": 0.0, "v": {}}
+    logging.getLogger().addHandler(logbuf)
+    logging.getLogger().setLevel(logging.INFO)
     store = Store(data / "alarms.json")
     builtin = data / "alarm.wav"
     audio = Audio(cfg, builtin)
     cam = Camera(cfg.camera.source, cfg.camera.quality, cfg.camera.width)
+    settings.listeners.append(lambda: cam.reconfigure(cfg.camera.source, cfg.camera.quality, cfg.camera.width))
     engine = Engine(cfg, store, audio, cam)
-    probe = {"active": False, "stats": {}}
+    probe = {"active": False, "stats": {}, "sound": False}
 
     @web.middleware
     async def auth(request, handler):
@@ -75,6 +87,77 @@ def build(cfg) -> web.Application:
     @r.get("/sound/alarm.wav")
     async def sound(_):
         return web.FileResponse(builtin)
+
+    @r.get("/sound/current")
+    async def sound_current(_):
+        p = Path(audio.current)
+        if not p.is_file():
+            raise web.HTTPNotFound()
+        return web.FileResponse(p)
+
+    @r.get("/api/settings")
+    async def get_settings(_):
+        return web.json_response({"settings": settings.describe(), "locked": settings.locked})
+
+    @r.put("/api/settings")
+    async def put_settings(req):
+        try:
+            settings.update(await body(req))
+        except PermissionError as e:
+            raise web.HTTPForbidden(text=str(e))
+        except ValueError as e:
+            raise web.HTTPBadRequest(text=json.dumps(e.args[0]) if isinstance(e.args[0], dict) else str(e))
+        return web.json_response({"settings": settings.describe(), "locked": settings.locked})
+
+    @r.delete("/api/settings")
+    async def reset_settings(_):
+        settings.reset()
+        return web.json_response({"settings": settings.describe(), "locked": settings.locked})
+
+    @r.get("/api/logs")
+    async def logs(req):
+        n = max(1, min(200, int(req.query.get("n", 100) or 100)))
+        return web.json_response({"lines": list(logbuf.lines)[-n:]})
+
+    @r.get("/api/system")
+    async def system(_):
+        now = time.monotonic()
+        if now - net["at"] > 10:  # reachability checks at most every 10 s
+            net["at"] = now
+            cs = urlparse(str(cam.source))
+            checks = {}
+            if cs.hostname:
+                checks["camera"] = await tcp_ok(cs.hostname, 80)
+            if cfg.audio.backend in ("moode", "both"):
+                checks["moode"] = await tcp_ok(cfg.moode.host, cfg.moode.port)
+            net["v"] = {k: {"reachable": ok, "ms": ms} for k, (ok, ms) in checks.items()}
+        vers = {}
+        for pkg in ("aiohttp", "mediapipe", "opencv-python-headless", "opencv-contrib-python"):
+            try:
+                vers[pkg] = md.version(pkg)
+            except md.PackageNotFoundError:
+                pass
+        return web.json_response({
+            **await sampler.snapshot(), "network": net["v"], "versions": vers, "last_alarm": engine.last,
+            "hooks": engine.hook_log, "audio": {"current": audio.current, "players": [type(p).__name__ for p in audio.players]},
+        })
+
+    @r.post("/api/sound-test")
+    async def sound_test(_):
+        if engine.ringing or probe["sound"]:
+            raise web.HTTPConflict(text="alarm ringing or sound test already running")
+        probe["sound"] = True
+
+        async def play():
+            try:
+                await audio.start()
+                await asyncio.sleep(6)
+            finally:
+                await audio.stop()
+                probe["sound"] = False
+
+        asyncio.create_task(play())
+        return web.json_response({"ok": True, "seconds": 6})
 
     @r.get("/api/state")
     async def state(_):
@@ -197,7 +280,7 @@ def build(cfg) -> web.Application:
     @r.post("/api/dismiss")
     async def dismiss(_):
         if not engine.dismiss():
-            raise web.HTTPForbidden(text="manual dismiss disabled: smile!")
+            raise web.HTTPForbidden(text="Manual stop is disabled: smile at the camera, or enable ring.allow_manual_dismiss in Settings.")
         return web.json_response({"ok": True})
 
     @r.get("/api/events")
@@ -247,9 +330,10 @@ def build(cfg) -> web.Application:
             t.cancel()
         await audio.stop()
         await engine.close()
+        logging.getLogger().removeHandler(logbuf)
 
     app = web.Application(middlewares=[auth])
-    app[ENGINE], app[CAM] = engine, cam
+    app[ENGINE], app[CAM], app[AUDIO], app[SETTINGS] = engine, cam, audio, settings
     app.add_routes(r)
     app.on_startup.append(on_start)
     app.on_cleanup.append(on_stop)

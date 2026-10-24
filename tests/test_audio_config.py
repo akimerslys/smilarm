@@ -97,7 +97,7 @@ def test_both_backends_use_builtin_url_and_ramp(tmp_path, fake_local):
 
     assert asyncio.run(main()) == ["MoodePlayer", "_Local"]
     adds = [c for c in got if c.startswith("add ")]
-    assert adds and adds[0].endswith('/sound/alarm.wav"')
+    assert adds and adds[0].endswith('/sound/current"')
     assert "setvol 100" in got and got[-1] == "stop"  # reached volume_max, then stopped
 
 
@@ -146,3 +146,60 @@ def test_camera_presets():
         Camera("0", "ultra")
     assert control_url("http://10.9.141.122:81/stream", "medium") == "http://10.9.141.122/control?preset=medium"
     assert control_url("0", "low") is None
+
+
+# ---- moOde library folder (like `mpc listall DIR | shuf -n 1`) ----
+def _fake_mpd(files, got):
+    async def handler(r, w):
+        w.write(b"OK MPD 0.23.5\n")
+        while line := await r.readline():
+            cmd = line.decode().strip()
+            got.append(cmd)
+            if cmd.startswith("listall"):
+                w.write("".join(f"{x}\n" for x in files).encode())
+            w.write(b"OK\n")
+            await w.drain()
+
+    return handler
+
+
+def test_library_dir_picks_random_sound_from_moode_library():
+    got = []
+    files = ["directory: ALARM_TRACKS/sub", "file: ALARM_TRACKS/a.mp3", "file: ALARM_TRACKS/notes.txt", 'file: ALARM_TRACKS/we"ird.flac']
+
+    async def main():
+        srv = await asyncio.start_server(_fake_mpd(files, got), "127.0.0.1", 0)
+        p = audio.MoodePlayer("127.0.0.1", srv.sockets[0].getsockname()[1], "", "ALARM_TRACKS")
+        await p.start(40)
+        srv.close()
+        return p.picked
+
+    picked = asyncio.run(main())
+    assert picked in ("ALARM_TRACKS/a.mp3", 'ALARM_TRACKS/we"ird.flac')  # txt and directories skipped
+    assert got[0] == 'stop' or got[0].startswith("listall")
+    assert 'listall "ALARM_TRACKS"' in got
+    assert any(c.startswith("add ") and "\\\"" in c for c in got) or any(c == 'add "ALARM_TRACKS/a.mp3"' for c in got)
+    assert got[-1] == "play"
+
+
+def test_library_dir_empty_raises_helpful_error():
+    async def main():
+        srv = await asyncio.start_server(_fake_mpd([], []), "127.0.0.1", 0)
+        p = audio.MoodePlayer("127.0.0.1", srv.sockets[0].getsockname()[1], "", "ALARM_TRACKS")
+        try:
+            await p.start(40)
+        finally:
+            srv.close()
+
+    with pytest.raises(RuntimeError, match="mpc update ALARM_TRACKS"):
+        asyncio.run(main())
+
+
+def test_library_dir_setting_validation(tmp_path):
+    from alarmplus import settings as st
+
+    assert st.validate("moode.library_dir", "ALARM_TRACKS") == "ALARM_TRACKS"
+    assert st.validate("moode.library_dir", "") == ""
+    for bad in ("/var/lib/mpd/music", "../etc"):
+        with pytest.raises(ValueError):
+            st.validate("moode.library_dir", bad)

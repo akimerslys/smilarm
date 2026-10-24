@@ -23,6 +23,8 @@ DEFAULTS = {
     "audio": {
         "backend": "local",  # local | moode | both
         "sound": "",  # path/URL; empty = built-in generated alarm tone
+        "sound_dir": "",  # folder of sounds; a random one is picked per alarm (overrides "sound")
+        "device": "",  # mpv/aplay output device (e.g. alsa/plughw:1,0); empty = system default
         "volume_start": 15,
         "volume_max": 100,
         "ramp_seconds": 45,
@@ -32,6 +34,7 @@ DEFAULTS = {
         "port": 6600,
         "url": "",  # what MPD should play; empty = built-in tone served by this app
         "fallback_local": True,
+        "library_dir": "",  # folder in moOde's MPD library (e.g. "ALARM_TRACKS"): random file, played from the Rpi3 itself
     },
     "ring": {
         "max_minutes": 15,
@@ -39,6 +42,9 @@ DEFAULTS = {
         "camera_fail_seconds": 45,  # no frames this long -> manual dismiss unlocked
     },
     "events": {"webhook_url": ""},  # e.g. OpenClaw hook; receives JSON events
+    # Shell commands run ON THIS DEVICE (the one running alarmplus). Env: ALARM_EVENT, ALARM_ID,
+    # ALARM_LABEL, ALARM_TIME, ALARM_REASON (smile|manual|timeout), ALARM_SECONDS.
+    "hooks": {"on_ring": "", "on_dismiss": "", "timeout_seconds": 120},
     "data_dir": "data",
 }
 

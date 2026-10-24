@@ -37,6 +37,10 @@ Prefer the camera's IP address in `camera.source` (e.g. `http://10.9.141.122:81/
 
 Web UI: `http://<rpi5>.local:8080` — alarms, “Test ring”, “Camera” (plain live view, handy for aiming) and “Smile test” (live view with a smiling / not-smiling frame plus a table of debug values: score, threshold, progress, fps, frame age, …). The same values are available as JSON at `/api/debug`.
 
+Two more panels in the UI:
+- **System & debug** — CPU, memory, temperature, power/throttling (under-voltage!), load, disk, uptimes, reachability of the camera and moOde, package versions, last alarm result, last hook runs, the live log, and a **Test sound** button.
+- **Settings** — the options that are safe to change at runtime (smile threshold/hold, camera preset, volume ramp, sound file/folder/device, moOde, failsafes), each validated against its allowed range. Changes are stored in `data/settings.json`; `config.toml` is never rewritten and **Reset** returns to it. Commands and the webhook are editable here only when `server.token` is set.
+
 **3. Rpi3 + moOde (optional):** in `config.toml` set `audio.backend = "moode"` (or `"both"`) and `moode.host = "<rpi3>"`. moOde's MPD listens on port 6600 by default. The Rpi3 fetches the sound over HTTP from the Rpi5 (`/sound/alarm.wav`) — or set your own `moode.url` (e.g. an internet radio stream).
 
 **4. OpenClaw (optional):**
@@ -45,8 +49,14 @@ bash openclaw/install.sh        # copies the skill to ~/.openclaw/workspace/skil
 ```
 The agent manages alarms through the REST API (see `openclaw/skills/alarm-plus/SKILL.md`). For events (`ringing`, `dismissed`) set `[events] webhook_url`. I haven't verified OpenClaw's skill paths and format against a real installation — check them against your version.
 
+## Documentation
+- [`docs/setup_moode_other_device.md`](docs/setup_moode_other_device.md) — ring through a second Pi running moOde.
+- [`docs/sound_output.md`](docs/sound_output.md) — speakers, output device, your own sounds / a sound folder, volume (no moOde needed).
+- [`docs/after_alarm_hooks.md`](docs/after_alarm_hooks.md) — run your own script when an alarm starts/ends (on the Rpi5, e.g. `ssh rpi3 ~/after_alarm.sh`).
+
 ## Safety
-- Manual dismissal is disabled (`allow_manual_dismiss = false`). Exception: if the camera is silent for longer than `camera_fail_seconds`, a button appears in the UI, so a broken camera can't ring forever.
+- The web UI has a **Stop alarm** button while ringing. For real alarms it works only if `ring.allow_manual_dismiss` is on (Settings or `config.toml`; off by default, since it defeats the purpose), or when the camera has been silent for `camera_fail_seconds`. A **Test ring** can always be stopped.
+- Manual dismissal is disabled by default (`allow_manual_dismiss = false`). Exception: if the camera is silent for longer than `camera_fail_seconds`, a button appears in the UI, so a broken camera can't ring forever.
 - The alarm stops by itself after `max_minutes`.
 - On an untrusted network, set `server.token`.
 

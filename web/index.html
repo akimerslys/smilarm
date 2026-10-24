@@ -16,12 +16,18 @@ img{width:100%;border-radius:8px;display:none;margin-top:8px}
 #verdict.smile{color:var(--ok)}#verdict.no{color:var(--bad)}#verdict.none{color:var(--mut)}
 table{width:100%;border-collapse:collapse;font:13px ui-monospace,monospace;margin-top:8px}td{padding:2px 4px;border-top:1px solid var(--bg)}td:last-child{text-align:right}
 #err{color:var(--bad);font-size:14px}
+details.card>summary{cursor:pointer;font-weight:600}
+.set{display:grid;grid-template-columns:1fr 150px;gap:2px 10px;align-items:center;margin:8px 0 2px}.set small{grid-column:1/-1;color:var(--mut);margin-bottom:6px}
+.set input[type=text],.set input[type=number],.set select{width:100%;font:inherit;padding:6px;border-radius:8px;border:1px solid var(--mut);background:var(--bg);color:var(--fg)}
+.set .lock{opacity:.5}.set .ovr{color:var(--acc)}h3{font-size:14px;margin:14px 0 0;color:var(--mut);text-transform:uppercase}
+.meter{height:8px;border-radius:4px;background:var(--bg);overflow:hidden}.meter i{display:block;height:100%;background:var(--ok);width:0}.meter i.hot{background:var(--bad)}
+pre{max-height:220px;overflow:auto;font:12px ui-monospace,monospace;background:var(--bg);padding:8px;border-radius:8px;white-space:pre-wrap}
 </style></head><body>
 <h1>⏰ Alarm+ <span class="mut" id="next"></span></h1>
 
 <div class="card" id="ring"><b>🔔 Ringing! Smile at the camera 😁</b>
  <div class="mut" id="score"></div><div class="bar"><i id="rbar"></i></div>
- <button class="g" id="dis" style="display:none;margin-top:8px">Dismiss (camera not responding)</button></div>
+ <button class="g" id="dis" style="margin-top:8px">Stop alarm</button></div>
 
 <div id="list"></div>
 
@@ -38,8 +44,24 @@ table{width:100%;border-collapse:collapse;font:13px ui-monospace,monospace;margi
  <table id="tbl"></table>
 </div>
 
+<details class="card" id="sysd"><summary>System &amp; debug</summary>
+ <div class="row" style="margin-top:8px"><span>CPU <b id="cpu">–</b></span><span>Memory <b id="mem">–</b></span><span>Temp <b id="temp">–</b></span></div>
+ <div class="meter" style="margin-top:6px"><i id="cpub"></i></div><div class="meter" style="margin-top:4px"><i id="memb"></i></div>
+ <table id="sys"></table>
+ <h3>Last hook runs</h3><pre id="hooks">–</pre>
+ <h3>Log</h3><pre id="log">–</pre>
+ <div class="row"><button class="g" id="sndtest">Test sound (6 s)</button><span class="mut">plays the current alarm sound without the camera</span></div>
+</details>
+
+<details class="card" id="setd"><summary>Settings</summary>
+ <div class="mut" id="lockmsg" style="margin-top:6px"></div>
+ <div id="setform"></div>
+ <div class="row" style="margin-top:10px"><button id="setsave">Save</button><button class="g" id="setreset">Reset to config.toml</button></div>
+ <div class="mut" id="setmsg"></div>
+</details>
+
 <script>
-const $=id=>document.getElementById(id),DN=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const esc=x=>String(x).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])),$=id=>document.getElementById(id),DN=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 let token=localStorage.getItem('tok')||'',mode='',dbgTimer=null;
 const q=u=>token?u+(u.includes('?')?'&':'?')+'token='+encodeURIComponent(token):u;
 async function api(m,u,b){const r=await fetch(q(u),{method:m,headers:{'Content-Type':'application/json'},body:b&&JSON.stringify(b)});
@@ -49,12 +71,12 @@ $('days').innerHTML=DN.map((d,i)=>`<label><input type=checkbox value=${i}> ${d}<
 function render(s){
  $('next').textContent=s.next?'→ '+s.next.at.replace('T',' '):'';
  const ring=s.state=='ringing';$('ring').style.display=ring?'block':'none';
- if(ring){$('score').textContent='smile: '+(s.score??'no face found');$('rbar').style.width=(s.progress*100)+'%';$('dis').style.display=s.degraded?'inline-block':'none'}
+ if(ring){$('score').textContent='smile: '+(s.score??'no face found');$('rbar').style.width=(s.progress*100)+'%';const d=$('dis');d.textContent=s.can_stop?'Stop alarm':'Stop alarm (disabled in Settings)';d.className=s.can_stop?'':'g'}
  if(s.alarms)$('list').innerHTML=s.alarms.map(a=>`<div class="card row"><div><div class="t">${a.time}</div><div class="mut">${a.label||''} ${a.days.length?a.days.map(d=>DN[d]).join(' '):'every day'}${a.once?' · once':''}</div></div>
   <div><input type=checkbox ${a.enabled?'checked':''} onchange="api('PUT','/api/alarms/${a.id}',{enabled:this.checked}).then(load)"> <button class=g onclick="api('DELETE','/api/alarms/${a.id}').then(load)">✕</button></div></div>`).join('')}
 async function load(){const s=await api('GET','/api/state');s&&render(s)}
 $('add').onclick=async()=>{await api('POST','/api/alarms',{time:$('time').value,label:$('label').value,once:$('once').checked,days:[...$('days').querySelectorAll('input:checked')].map(i=>+i.value)});load()};
-$('test').onclick=()=>api('POST','/api/test');$('dis').onclick=()=>api('POST','/api/dismiss');
+$('test').onclick=()=>api('POST','/api/test');$('dis').onclick=()=>api('POST','/api/dismiss').then(load);
 $('tok').onclick=()=>{token=prompt('Token',token)||'';localStorage.setItem('tok',token)};
 
 // camera views: '' (off) | 'cam' (plain preview) | 'st' (smile test with live debug values)
@@ -82,7 +104,55 @@ async function pollDebug(){
  else if(d.smiling){v.className='smile';v.textContent='😁 SMILING'}
  else{v.className='no';v.textContent='😐 not smiling'}
  $('tbar').style.width=((d.progress||0)*100)+'%';
- $('tbl').innerHTML=ROWS.map(([n,k])=>`<tr><td>${n}</td><td>${d[k]===undefined||d[k]===null?'–':d[k]}</td></tr>`).join('')}
+ $('tbl').innerHTML=ROWS.map(([n,k])=>`<tr><td>${n}</td><td>${esc(d[k]===undefined||d[k]===null?'–':d[k])}</td></tr>`).join('')}
+
+// ---- System & debug (polled only while the panel is open) ----
+let sysTimer=null;
+const fmtS=s=>s==null?'–':s>86400?Math.floor(s/86400)+'d '+Math.floor(s%86400/3600)+'h':s>3600?Math.floor(s/3600)+'h '+Math.floor(s%3600/60)+'m':Math.floor(s/60)+'m '+s%60+'s';
+const meter=(id,p)=>{const e=$(id);e.style.width=(p||0)+'%';e.className=p>85?'hot':''};
+async function pollSys(){
+ const r=await fetch(q('/api/system'));if(!r.ok)return;const d=await r.json();
+ $('cpu').textContent=d.cpu_percent==null?'–':d.cpu_percent+'%';meter('cpub',d.cpu_percent);
+ $('mem').textContent=d.mem?d.mem.used_mb+'/'+d.mem.total_mb+' MB':'–';meter('memb',d.mem&&d.mem.percent);
+ $('temp').textContent=d.cpu_temp_c==null?'–':d.cpu_temp_c+'°C';
+ const net=Object.entries(d.network||{}).map(([k,v])=>k+': '+(v.reachable?'ok '+v.ms+' ms':'UNREACHABLE')).join(', ');
+ const rows=[['host',d.hostname],['platform',d.platform],['python',d.python],['load 1/5/15',d.load&&d.load.join(' ')],['cpu cores',d.cpu_count],
+  ['power / throttling',d.throttled==null?'n/a':d.throttled.length?d.throttled.join(', '):'ok'],['service RSS',d.process_rss_mb&&d.process_rss_mb+' MB'],
+  ['disk free',d.disk&&d.disk.free_mb+' MB ('+d.disk.percent+'% used)'],['host uptime',fmtS(d.host_uptime_s)],['service uptime',fmtS(d.service_uptime_s)],
+  ['reachability',net||'–'],['audio now',d.audio.current],['audio players',d.audio.players.join(', ')||'none'],
+  ['last alarm',d.last_alarm?d.last_alarm.at+' · '+d.last_alarm.reason+' · '+d.last_alarm.seconds+'s':'–'],
+  ...Object.entries(d.versions).map(([k,v])=>['pkg '+k,v])];
+ $('sys').innerHTML=rows.map(([n,v])=>`<tr><td>${n}</td><td>${esc(v??'–')}</td></tr>`).join('');
+ $('hooks').textContent=d.hooks.length?d.hooks.map(h=>h.at+' '+h.hook+' exit='+h.code+' '+h.cmd+(h.output?' → '+h.output.trim():'')).join(String.fromCharCode(10)):'no hook has run yet';
+ const l=await (await fetch(q('/api/logs?n=40'))).json();const pre=$('log'),bottom=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-8;
+ pre.textContent=l.lines.join(String.fromCharCode(10))||'–';if(bottom)pre.scrollTop=pre.scrollHeight}
+$('sysd').ontoggle=()=>{clearInterval(sysTimer);if($('sysd').open){pollSys();sysTimer=setInterval(pollSys,2000)}};
+$('sndtest').onclick=()=>api('POST','/api/sound-test');
+
+// ---- Settings (rendered from the server's schema, so ranges/choices always match validation) ----
+let schema=[];
+function field(s){
+ const id='s_'+s.key.replace('.','_'),dis=s.locked?'disabled':'',v=s.value;let input;
+ if(s.type=='bool')input=`<input type=checkbox id=${id} ${v?'checked':''} ${dis}>`;
+ else if(s.type=='choice')input=`<select id=${id} ${dis}>${s.choices.map(c=>`<option ${c==v?'selected':''}>${c}</option>`).join('')}</select>`;
+ else if(s.type=='str')input=`<input type=text id=${id} value="${esc(v)}" ${dis}>`;
+ else input=`<input type=number id=${id} value=${v} min=${s.min} max=${s.max} step=${s.step||1} ${dis}>`;
+ const range=s.type=='int'||s.type=='float'?` (${s.min}–${s.max})`:'';
+ return `<label class="${s.locked?'lock':''} ${s.overridden?'ovr':''}" for=${id}>${s.key}${s.overridden?' •':''}</label>${input}<small>${s.help}${range}${s.locked?' — needs server.token':''}</small>`}
+async function loadSettings(){
+ const r=await api('GET','/api/settings');if(!r)return;schema=r.settings;
+ $('lockmsg').textContent=r.locked?'Commands and webhook are read-only until server.token is set in config.toml (so nobody on your LAN can set a command).':'';
+ const groups={};schema.forEach(s=>(groups[s.key.split('.')[0]]??=[]).push(s));
+ $('setform').innerHTML=Object.entries(groups).map(([g,l])=>`<h3>${g}</h3><div class="set">${l.map(field).join('')}</div>`).join('')}
+$('setd').ontoggle=()=>{if($('setd').open)loadSettings()};
+$('setsave').onclick=async()=>{
+ const upd={};schema.filter(s=>!s.locked).forEach(s=>{const e=$('s_'+s.key.replace('.','_'));
+  const v=s.type=='bool'?e.checked:s.type=='int'||s.type=='float'?(e.value===''?NaN:+e.value):e.value;if(v!==s.value)upd[s.key]=v});
+ if(!Object.keys(upd).length){$('setmsg').textContent='Nothing changed.';return}
+ const r=await fetch(q('/api/settings'),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(upd)});
+ if(r.ok){$('setmsg').textContent='Saved. Camera/audio changes apply to the next alarm.';loadSettings()}
+ else{let t=await r.text();try{t=Object.entries(JSON.parse(t)).map(([k,m])=>k+': '+m).join('; ')}catch(e){}$('setmsg').textContent='Not saved — '+t}};
+$('setreset').onclick=async()=>{if(confirm('Discard all changes made here and go back to config.toml values?')){await api('DELETE','/api/settings');$('setmsg').textContent='Reset.';loadSettings()}};
 
 load().then(()=>{const es=new EventSource(q('/api/events'));
  es.onmessage=e=>{const s=JSON.parse(e.data);render(s);if(s.state=='idle'&&s.next!==undefined)load()}});

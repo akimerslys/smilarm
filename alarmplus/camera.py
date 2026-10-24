@@ -43,6 +43,13 @@ class Camera:
         self._fps = 0.0
         self._t_open = 0.0
 
+    def reconfigure(self, source, quality: str, width: int = 0):
+        """Apply new settings; they take effect the next time the camera is opened."""
+        if quality not in PRESETS:
+            raise ValueError(f"camera.quality must be one of {sorted(PRESETS)}")
+        self.source = int(source) if str(source).isdigit() else source
+        self.quality, self.width = quality, width or PRESETS[quality]
+
     def acquire(self):
         with self._lock:
             self._refs += 1

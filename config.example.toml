@@ -9,21 +9,31 @@ source = "http://alarmcam.local:81/stream"   # ESP32-CAM; or "0" for a USB/Pi ca
 quality = "low"       # low 320x240 | medium 640x480 | high 800x600 (more detail, more CPU/Wi-Fi)
 
 [smile]
-threshold = 0.5       # lower = easier to dismiss
+threshold = 0.25       # lower = easier to dismiss
 hold_seconds = 2.5
 
 [audio]
 backend = "local"     # local | moode | both
 ramp_seconds = 45
+# sound = "/home/pi/alarm-sounds/morning.mp3"   # file or http(s) URL; empty = built-in tone
+# sound_dir = "/home/pi/alarm-sounds"           # random file from this folder per alarm
+# device = "alsa/plughw:CARD=Device,DEV=0"      # `mpv --audio-device=help`; empty = default
 
 # Optional extra: Rpi3 with moOde Audio + speakers
 [moode]
 host = "moode.local"
+# library_dir = "ALARM_TRACKS"   # play a random file from this folder of moOde's own library (no transfer from this device)
 # url = "http://192.168.1.50:8080/sound/alarm.wav"   # default: built-in tone served by this app
 
 [ring]
 max_minutes = 15
 allow_manual_dismiss = false
+
+[hooks]
+# Shell commands run ON THIS DEVICE when an alarm starts / ends (see docs/after_alarm_hooks.md)
+# on_dismiss = "ssh -o BatchMode=yes pi@rpi3.local 'bash ~/after_alarm.sh'"
+# on_ring = ""
+timeout_seconds = 120
 
 [events]
 # OpenClaw (or any) webhook receiving {"source","event","alarm",...}

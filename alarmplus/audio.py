@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import math
+import random
 import shutil
 import socket
 import struct
@@ -11,6 +12,7 @@ from pathlib import Path
 
 log = logging.getLogger("audio")
 MPV_SOCK = "/tmp/alarmplus-mpv.sock"
+SOUND_EXT = {".wav", ".mp3", ".ogg", ".flac", ".m4a", ".opus"}
 
 
 def make_builtin_tone(path: Path):
@@ -32,17 +34,18 @@ def make_builtin_tone(path: Path):
 
 
 class LocalPlayer:
-    def __init__(self, sound: str):
-        self.sound, self.proc = sound, None
+    def __init__(self, sound: str, device: str = ""):
+        self.sound, self.device, self.proc = sound, device, None
 
     async def start(self, volume: int):
         if mpv := shutil.which("mpv"):
             cmd = [mpv, "--no-video", "--really-quiet", "--loop=inf", f"--volume={volume}",
-                   f"--input-ipc-server={MPV_SOCK}", self.sound]
+                   f"--input-ipc-server={MPV_SOCK}", *([f"--audio-device={self.device}"] if self.device else []), self.sound]
         elif ff := shutil.which("ffplay"):
             cmd = [ff, "-nodisp", "-loglevel", "quiet", "-loop", "0", self.sound]
         elif ap := shutil.which("aplay"):
-            cmd = ["sh", "-c", f'while :; do {ap} -q "{self.sound}"; done']
+            dev = f'-D "{self.device}"' if self.device else ""
+            cmd = ["sh", "-c", f'while :; do {ap} -q {dev} "{self.sound}"; done']
         else:
             raise RuntimeError("no audio player found (install mpv)")
         self.proc = await asyncio.create_subprocess_exec(*cmd)
@@ -69,25 +72,43 @@ class LocalPlayer:
 class MoodePlayer:
     """Minimal MPD client (moOde runs MPD on :6600)."""
 
-    def __init__(self, host: str, port: int, url: str):
-        self.host, self.port, self.url = host, port, url
+    def __init__(self, host: str, port: int, url: str, library_dir: str = ""):
+        self.host, self.port, self.url, self.library_dir = host, port, url, library_dir
+        self.picked = ""  # what was queued (a URL or a library path)
         self._r = self._w = None
 
-    async def _cmd(self, line: str):
+    @staticmethod
+    def _q(s: str) -> str:
+        """Quote an MPD command argument."""
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    async def _cmd(self, line: str) -> list[str]:
         self._w.write(line.encode() + b"\n")
         await self._w.drain()
+        out = []
         while True:
             resp = (await asyncio.wait_for(self._r.readline(), 5)).decode().strip()
             if resp == "OK":
-                return
+                return out
             if resp.startswith("ACK") or not resp:
                 raise RuntimeError(resp or "connection closed")
+            out.append(resp)
+
+    async def _random_library_file(self) -> str:
+        """Random sound from a folder of moOde's own MPD library, like `mpc listall DIR | shuf -n 1`."""
+        lines = await self._cmd(f"listall {self._q(self.library_dir)}")
+        files = [x[6:] for x in lines if x.startswith("file: ") and Path(x).suffix.lower() in SOUND_EXT]
+        if not files:
+            raise RuntimeError(
+                f"no sound files in moOde library folder '{self.library_dir}' "
+                f"(add files, then run: mpc update {self.library_dir})")
+        return random.choice(files)
 
     async def start(self, volume: int):
         self._r, self._w = await asyncio.wait_for(asyncio.open_connection(self.host, self.port), 4)
         await asyncio.wait_for(self._r.readline(), 4)  # "OK MPD x.y.z"
-        url = self.url.replace('"', "%22")
-        for c in ("stop", "clear", f'add "{url}"', "repeat 1", "single 0", f"setvol {volume}", "play"):
+        self.picked = await self._random_library_file() if self.library_dir else self.url
+        for c in ("stop", "clear", f"add {self._q(self.picked)}", "repeat 1", "single 0", f"setvol {volume}", "play"):
             try:
                 await self._cmd(c)
             except RuntimeError as e:
@@ -126,6 +147,17 @@ class Audio:
         make_builtin_tone(builtin)
         self.players: list = []
         self._ramp: asyncio.Task | None = None
+        self.current: str = str(builtin)  # what the last start() picked (served to moOde as /sound/current)
+
+    def _pick_sound(self) -> str:
+        """sound_dir (random file) > sound (file/URL) > built-in tone."""
+        a = self.cfg.audio
+        if a.sound_dir:
+            files = [p for p in Path(a.sound_dir).expanduser().iterdir() if p.is_file() and p.suffix.lower() in SOUND_EXT]
+            if files:
+                return str(random.choice(files))
+            log.warning("sound_dir %s has no usable sound files", a.sound_dir)
+        return a.sound or str(self.builtin)
 
     async def _try(self, p, vol) -> bool:
         try:
@@ -140,17 +172,19 @@ class Audio:
     async def start(self):
         a, m = self.cfg.audio, self.cfg.moode
         v0 = a.volume_start
+        self.current = self._pick_sound()
         want_moode = a.backend in ("moode", "both")
         ok_moode = False
         if want_moode:
             try:
-                url = m.url or f"http://{_own_ip_towards(m.host)}:{self.cfg.server.port}/sound/alarm.wav"
+                url = "" if m.library_dir else m.url or (self.current if self.current.startswith("http") else
+                                f"http://{_own_ip_towards(m.host)}:{self.cfg.server.port}/sound/current")
             except OSError as e:
                 log.warning("cannot resolve moOde host: %s", e)
             else:
-                ok_moode = await self._try(MoodePlayer(m.host, m.port, url), v0)
+                ok_moode = await self._try(MoodePlayer(m.host, m.port, url, m.library_dir), v0)
         if a.backend in ("local", "both") or (want_moode and not ok_moode and m.fallback_local):
-            await self._try(LocalPlayer(a.sound or str(self.builtin)), v0)
+            await self._try(LocalPlayer(self.current, a.device), v0)
         if not self.players:
             log.error("no audio backend started")
         self._ramp = asyncio.create_task(self._ramp_volume())

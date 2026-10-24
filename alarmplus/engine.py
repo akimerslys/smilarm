@@ -1,8 +1,10 @@
 """Scheduler + ring loop: sleeps until the next alarm, rings until the user smiles."""
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime
+from pathlib import Path
 
 import aiohttp
 
@@ -21,6 +23,9 @@ class Engine:
         self._dismiss = asyncio.Event()
         self._subs: set[asyncio.Queue] = set()
         self._http: aiohttp.ClientSession | None = None
+        self._hooks: set[asyncio.Task] = set()
+        self.last: dict | None = None  # outcome of the most recent alarm
+        self.hook_log: list[dict] = []
 
     # ---- pub/sub (SSE) ----
     def subscribe(self):
@@ -31,8 +36,18 @@ class Engine:
     def unsubscribe(self, q):
         self._subs.discard(q)
 
+    def _can_stop(self) -> bool:
+        """Manual stop (web UI button) is allowed if enabled in settings, if the camera is dead,
+        or for a *test* ring, which is never supposed to trap you."""
+        return self.ringing and bool(
+            self.cfg.ring.allow_manual_dismiss
+            or self.state.get("degraded")
+            or (self.state.get("alarm") or {}).get("id") == "test"
+        )
+
     def _publish(self, **kw):
         self.state = {**self.state, **kw}
+        self.state["can_stop"] = self._can_stop()
         for q in self._subs:
             if q.full():
                 q.get_nowait()
@@ -48,6 +63,33 @@ class Engine:
         except Exception as e:
             log.warning("webhook failed: %s", e)
 
+    def run_hook(self, name: str, alarm: dict, **extra):
+        """Fire-and-forget: run hooks.<name> as a shell command on this device."""
+        cmd = getattr(self.cfg.hooks, name).strip()
+        if cmd:
+            t = asyncio.create_task(self._hook(name, cmd, alarm, extra))
+            self._hooks.add(t)
+            t.add_done_callback(self._hooks.discard)
+
+    async def _hook(self, name, cmd, alarm, extra):
+        env = {**os.environ, "ALARM_EVENT": name.removeprefix("on_"), "ALARM_ID": str(alarm.get("id", "")),
+               "ALARM_LABEL": str(alarm.get("label", "")), "ALARM_TIME": str(alarm.get("time", "")),
+               **{"ALARM_" + k.upper(): str(v) for k, v in extra.items()}}
+        rec = {"hook": name, "cmd": cmd, "at": datetime.now().isoformat(timespec="seconds")}
+        try:
+            p = await asyncio.create_subprocess_shell(
+                cmd, env=env, cwd=str(Path.home()), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            try:
+                out, _ = await asyncio.wait_for(p.communicate(), self.cfg.hooks.timeout_seconds)
+                rec.update(code=p.returncode, output=out.decode(errors="replace")[-500:])
+            except asyncio.TimeoutError:
+                p.kill()
+                rec.update(code=None, output=f"killed after {self.cfg.hooks.timeout_seconds}s")
+        except Exception as e:
+            rec.update(code=None, output=str(e))
+        log.log(logging.INFO if rec["code"] == 0 else logging.WARNING, "hook %s -> %s %s", name, rec["code"], rec["output"].strip()[:200])
+        self.hook_log = (self.hook_log + [rec])[-10:]
+
     def snapshot(self):
         nxt = self.store.next(datetime.now())
         return {**self.state, "next": {"at": nxt[0].isoformat(timespec="minutes"), "id": nxt[1]["id"]} if nxt else None}
@@ -57,12 +99,10 @@ class Engine:
 
     # ---- control ----
     def dismiss(self) -> bool:
-        if not self.ringing:
+        if not self._can_stop():
             return False
-        if self.cfg.ring.allow_manual_dismiss or self.state.get("degraded"):
-            self._dismiss.set()
-            return True
-        return False
+        self._dismiss.set()
+        return True
 
     async def preload(self):
         s = self.cfg.smile
@@ -95,6 +135,7 @@ class Engine:
         last_ts, outcome = 0.0, "timeout"
         self._publish(state="ringing", alarm=alarm, score=None, progress=0.0, degraded=False)
         await self._emit("ringing", alarm=alarm)
+        self.run_hook("on_ring", alarm)
         self.cam.acquire()
         try:
             await self.audio.start()
@@ -126,9 +167,15 @@ class Engine:
         if alarm.get("once") and alarm["id"] in {a["id"] for a in self.store.alarms}:
             self.store.update(alarm["id"], {"enabled": False})
         self._publish(state="idle", alarm=None, score=None, progress=0.0, degraded=False)
-        await self._emit("dismissed", alarm=alarm, reason=outcome, seconds=round(time.monotonic() - t0))
+        secs = round(time.monotonic() - t0)
+        self.last = {"id": alarm.get("id"), "label": alarm.get("label", ""), "reason": outcome, "seconds": secs,
+                     "at": datetime.now().isoformat(timespec="seconds")}
+        await self._emit("dismissed", alarm=alarm, reason=outcome, seconds=secs)
+        self.run_hook("on_dismiss", alarm, reason=outcome, seconds=secs)
         log.info("alarm %s ended: %s", alarm.get("id"), outcome)
 
     async def close(self):
+        for t in list(self._hooks):
+            t.cancel()
         if self._http:
             await self._http.close()
