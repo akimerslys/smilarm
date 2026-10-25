@@ -26,23 +26,44 @@ details.card>summary{cursor:pointer;font-weight:600}
 #setup .it button{padding:3px 10px;font-size:13px}.lv{font-weight:700;width:1.4em}.lv.ok{color:var(--ok)}.lv.warn,.lv.todo{color:var(--bad)}.lv.info{color:var(--mut)}
 #rstbar{display:none;margin:8px 0;padding:8px;border-radius:8px;background:var(--bg);border:1px solid var(--acc);font-size:14px}
 .badge{font-size:11px;color:var(--acc);border:1px solid var(--acc);border-radius:4px;padding:0 4px;margin-left:4px}
+.hero{text-align:center;padding:22px 0 8px}.big{font-size:56px;font-weight:700;letter-spacing:-1px;line-height:1.1}
+h2{font-size:15px;margin:18px 4px 4px;color:var(--mut);font-weight:600}
+.rtitle{font-size:20px;font-weight:700;text-align:center}
+#rimg{display:block;margin:10px auto 0;max-height:340px;object-fit:contain;background:#000}
+.tryit{display:flex;align-items:center;justify-content:space-between;gap:12px}.tryit button{white-space:nowrap}
+details.card>summary{list-style:none}details.card>summary::-webkit-details-marker{display:none}
+button{cursor:pointer;min-height:40px}.al.off .t{opacity:.4}
+.sw{position:relative;display:inline-block;width:46px;height:26px}.sw input{opacity:0;width:0;height:0}
+.sw span{position:absolute;inset:0;background:var(--mut);border-radius:13px;transition:.2s;cursor:pointer}
+.sw span:before{content:"";position:absolute;width:20px;height:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
+.sw input:checked+span{background:var(--ok)}.sw input:checked+span:before{transform:translateX(20px)}
 pre{max-height:220px;overflow:auto;font:12px ui-monospace,monospace;background:var(--bg);padding:8px;border-radius:8px;white-space:pre-wrap}
 </style></head><body>
-<h1>⏰ Smilarm <span class="mut" id="next"></span></h1>
+<div class="hero"><div class="mut">Smilarm · smile to switch off your alarm</div>
+ <div class="big" id="nexttime">–</div><div class="mut" id="nextsub">Loading…</div></div>
 
 <div class="card" id="setup" style="display:none"></div>
 
-<div class="card" id="ring"><b>🔔 Ringing! Smile at the camera 😁</b>
+<div class="card" id="ring"><div class="rtitle" id="rtitle">🔔 Time to wake up! Smile at the camera 😁</div>
+ <img id="rimg" alt="Live camera">
  <div class="mut" id="score"></div><div class="bar"><i id="rbar"></i></div>
- <button class="g" id="dis" style="margin-top:8px">Stop alarm</button></div>
+ <button class="g" id="dis" style="margin-top:10px;width:100%">Stop alarm</button></div>
 
+<h2>Your alarms</h2>
 <div id="list"></div>
+<div class="mut" id="empty" style="display:none;text-align:center;padding:14px">No alarms yet. Add your first one below.</div>
 
-<div class="card"><div class="row" style="flex-wrap:nowrap"><input type="time" id="time" value="07:00"><input type="text" id="label" placeholder="Label" style="flex:1;min-width:0"></div>
+<details class="card" id="addd"><summary>＋ New alarm</summary>
+ <div class="row" style="flex-wrap:nowrap;margin-top:10px"><input type="time" id="time" value="07:00"><input type="text" id="label" placeholder="Name (optional)" style="flex:1;min-width:0"></div>
  <div class="days" id="days" style="margin:8px 0"></div>
- <div class="row"><label><input type="checkbox" id="once"> once</label><button id="add">Add alarm</button></div></div>
+ <div class="mut">No days ticked = every day.</div>
+ <div class="row" style="margin-top:8px"><label><input type="checkbox" id="once"> only once</label><button id="add">Add alarm</button></div></div>
 
-<div class="row"><button class="g" id="test">Test ring</button><button class="g" id="cam">Camera</button><button class="g" id="st">Smile test</button><button class="g" id="tok">Token</button></div>
+<div class="card tryit"><div><b>Try it out</b><div class="mut">Rings now with the camera on, so you can see how your smile is read. Nothing is saved.</div></div>
+ <button id="test">Test alarm</button></div>
+
+<details class="card" id="advd"><summary>Advanced</summary>
+<div class="row" style="margin-top:10px"><button class="g" id="cam">Camera</button><button class="g" id="st">Smile test</button><button class="g" id="tok">Access token</button></div>
 <div id="err"></div>
 <img id="prev" alt="">
 <div id="dbg" class="card" style="display:none">
@@ -67,6 +88,7 @@ pre{max-height:220px;overflow:auto;font:12px ui-monospace,monospace;background:v
  <div class="row" style="margin-top:10px"><button id="setsave">Save to config.toml</button><button class="g" id="setreload">Reload file</button><button class="g" id="setreset">Restore defaults</button></div>
  <div class="mut" id="setmsg"></div>
 </details>
+</details>
 
 <script>
 const esc=x=>String(x).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])),$=id=>document.getElementById(id),DN=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -77,11 +99,20 @@ async function api(m,u,b){const r=await fetch(q(u),{method:m,headers:{'Content-T
  if(!r.ok){alert(await r.text());return false}return r.json()}
 $('days').innerHTML=DN.map((d,i)=>`<label><input type=checkbox value=${i}> ${d}</label>`).join('');
 function render(s){
- $('next').textContent=s.next?'→ '+s.next.at.replace('T',' '):'';
+ if(s.next!==undefined){const n=s.next&&new Date(s.next.at);
+  $('nexttime').textContent=n&&!isNaN(n)?n.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'–';
+  $('nextsub').textContent=n&&!isNaN(n)?'Next alarm · '+(n.toDateString()==new Date().toDateString()?'today':n.toLocaleDateString([],{weekday:'long',day:'numeric',month:'short'})):'No alarm is set'}
  const ring=s.state=='ringing';$('ring').style.display=ring?'block':'none';
- if(ring){$('score').textContent='smile: '+(s.score??'no face found');$('rbar').style.width=(s.progress*100)+'%';const d=$('dis');d.textContent=s.can_stop?'Stop alarm':'Stop alarm (disabled in Settings)';d.className=s.can_stop?'':'g'}
- if(s.alarms)$('list').innerHTML=s.alarms.map(a=>`<div class="card row"><div><div class="t">${a.time}</div><div class="mut">${esc(a.label||'')} ${a.days.length?a.days.map(d=>DN[d]).join(' '):'every day'}${a.once?' · once':''}</div></div>
-  <div><input type=checkbox ${a.enabled?'checked':''} onchange="api('PUT','/api/alarms/${a.id}',{enabled:this.checked}).then(load)"> <button class=g onclick="api('DELETE','/api/alarms/${a.id}').then(load)">✕</button></div></div>`).join('')}
+ if(ring){const test=s.alarm&&s.alarm.id=='test';
+  $('rtitle').textContent=test?'🧪 Test alarm: smile at the camera 😁':'🔔 Time to wake up! Smile at the camera 😁';
+  $('score').textContent=s.score==null?'Looking for your face…':s.score>=0.5?'😁 Nice smile, hold it!':'😐 Show me a bigger smile';
+  $('rbar').style.width=(s.progress*100)+'%';const d=$('dis');d.textContent=test?'End test':s.can_stop?'Stop alarm':'Stop alarm (disabled in Settings)';d.className=s.can_stop?'':'g';
+  if(mode)setMode(mode);
+  const im=$('rimg');if(!im.dataset.on){im.dataset.on=1;im.style.display='block';im.src=q('/api/preview.mjpg')}}
+ else{const im=$('rimg');if(im.dataset.on){delete im.dataset.on;im.src='';im.style.display='none'}}
+ if(s.alarms){$('empty').style.display=s.alarms.length?'none':'block';
+  $('list').innerHTML=s.alarms.map(a=>`<div class="card row al ${a.enabled?'':'off'}"><div><div class="t">${a.time}</div><div class="mut">${esc(a.label||'')} ${a.days.length?a.days.map(d=>DN[d]).join(' '):'every day'}${a.once?' · once':''}</div></div>
+  <div class="row"><label class="sw"><input type=checkbox ${a.enabled?'checked':''} onchange="api('PUT','/api/alarms/${a.id}',{enabled:this.checked}).then(load)"><span></span></label> <button class=g title="Delete" onclick="if(confirm('Delete this alarm?'))api('DELETE','/api/alarms/${a.id}').then(load)">✕</button></div></div>`).join('')}}
 async function load(){const s=await api('GET','/api/state');s&&render(s)}
 $('add').onclick=async()=>{await api('POST','/api/alarms',{time:$('time').value,label:$('label').value,once:$('once').checked,days:[...$('days').querySelectorAll('input:checked')].map(i=>+i.value)});load()};
 $('test').onclick=()=>api('POST','/api/test');$('dis').onclick=()=>api('POST','/api/dismiss').then(load);

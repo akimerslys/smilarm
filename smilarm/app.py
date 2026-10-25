@@ -444,6 +444,8 @@ def build(cfg, config_path: str | None = None) -> web.Application:
                 f, ts = cam.latest()
                 if f is not None and ts != last:
                     last = ts
+                    if engine.ringing:  # the ring loop is already scoring frames: show its verdict on the picture
+                        f = annotate(f.copy(), engine.state.get("score"), cfg.smile.threshold, engine.state.get("progress") or 0.0)
                     _, jpg = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 70])
                     await resp.write(b"--f\r\nContent-Type: image/jpeg\r\n\r\n" + jpg.tobytes() + b"\r\n")
                 await asyncio.sleep(0.15)
