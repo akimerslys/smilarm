@@ -4,7 +4,8 @@ import tomllib
 from pathlib import Path
 
 DEFAULTS = {
-    "server": {"host": "0.0.0.0", "port": 8080, "token": ""},
+    "general": {"timezone": ""},  # IANA name, e.g. Europe/London; empty = the system timezone (UTC in a container!)
+    "server": {"host": "0.0.0.0", "port": 8080, "token": "", "public_url": ""},
     "camera": {
         # ESP32-CAM stream URL, or a local device index ("0") for a USB/Pi camera.
         "source": "http://alarmcam.local:81/stream",

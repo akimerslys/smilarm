@@ -55,6 +55,11 @@ What actually matters is **outside** that page:
 4. For `library_dir`: the sound files are in the music library and the database knows them
    (`mpc update ALARM_TRACKS`).
 
+> **Alarm+ in Docker?** With the default host networking (`docker-compose.yml`) everything below works unchanged: the container has the
+> device's own address, so moOde can fetch `/sound/current` from it. With **bridge networking** the container's private address is
+> unreachable from the moOde device: set **Settings → `server.public_url`** to the Docker host's address, e.g. `http://192.168.1.20:8080`.
+> Either way use IP addresses (`moode.local` does not resolve inside a container). "The Rpi5" below means the device running Alarm+.
+
 ## 3. Give the device a stable address
 Reserve an IP for it in your router (DHCP reservation). `moode.local` (mDNS) often does **not** resolve
 from a Raspberry Pi running Linux; an IP address always works.
@@ -80,7 +85,7 @@ they only serve the alarm sound.)
 If you use a firewall on the Rpi5 (`ufw`), allow the web port from the moOde device.
 
 ## 6. Point Alarm+ at it
-Edit `config.toml` on the Rpi5 (or use **Settings** in the web UI):
+In the web UI open **Settings** (Sound → `audio.backend`, Second speaker → `moode.*`). In `config.toml` terms:
 ```toml
 [audio]
 backend = "moode"        # "both" = Rpi5 and moOde ring together
@@ -91,7 +96,7 @@ port = 6600
 fallback_local = true
 # url = "http://10.0.0.20:8080/sound/current"   # optional, see below
 ```
-Then restart: `sudo systemctl restart alarmplus`, open the web UI and press **System & debug → Test sound**.
+The settings apply immediately; press **System & debug → Test sound**.
 The "reachability" row in that panel shows whether Alarm+ can currently reach moOde.
 
 ### Which sound does moOde play?

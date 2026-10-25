@@ -14,7 +14,7 @@ EXTRA_HINTS = {
     "server.token": "set it if the network isn't trusted: every /api call then needs it (Bearer token or ?token=)",
     "camera.width": "detector frame width; 0 = take it from camera.quality",
     "smile.backend": "auto | mediapipe | haar",
-    "smile.model": "MediaPipe face landmarker model (downloaded by deploy/install.sh)",
+    "smile.model": "MediaPipe face landmarker model (shipped in the Docker image, or fetched by the native installer)",
     "audio.sound": "file path or http(s) URL; empty = built-in tone",
     "data_dir": "alarms, the face model, logs and the built-in tone live here (relative to this file)",
 }
@@ -28,8 +28,13 @@ def _toml(v) -> str:
     return json.dumps(v, ensure_ascii=False)  # JSON strings are valid TOML basic strings
 
 
-def render_defaults() -> str:
-    """A complete config.toml with every default value, commented."""
+def render_defaults(port: int | None = None) -> str:
+    """A complete config.toml with every default value, commented. `port` overrides server.port (first start on a busy 8080)."""
+    text = _render_defaults()
+    return set_values(text, {"server.port": port}) if port else text
+
+
+def _render_defaults() -> str:
     d = config.DEFAULTS
     out = ["# Alarm+ configuration (generated with all default values; edit what you need).",
            "# Most of these can also be changed live in the web UI > Settings, which saves them back into this file.", ""]

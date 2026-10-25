@@ -21,9 +21,15 @@ details.card>summary{cursor:pointer;font-weight:600}
 .set input[type=text],.set input[type=number],.set select{width:100%;font:inherit;padding:6px;border-radius:8px;border:1px solid var(--mut);background:var(--bg);color:var(--fg)}
 .set .lock{opacity:.5}.set .ovr{color:var(--acc)}h3{font-size:14px;margin:14px 0 0;color:var(--mut);text-transform:uppercase}
 .meter{height:8px;border-radius:4px;background:var(--bg);overflow:hidden}.meter i{display:block;height:100%;background:var(--ok);width:0}.meter i.hot{background:var(--bad)}
+#setup b{display:block;margin-bottom:6px}#setup .it{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:4px 0;border-top:1px solid var(--bg);font-size:14px}
+#setup .it button{padding:3px 10px;font-size:13px}.lv{font-weight:700;width:1.4em}.lv.ok{color:var(--ok)}.lv.warn,.lv.todo{color:var(--bad)}.lv.info{color:var(--mut)}
+#rstbar{display:none;margin:8px 0;padding:8px;border-radius:8px;background:var(--bg);border:1px solid var(--acc);font-size:14px}
+.badge{font-size:11px;color:var(--acc);border:1px solid var(--acc);border-radius:4px;padding:0 4px;margin-left:4px}
 pre{max-height:220px;overflow:auto;font:12px ui-monospace,monospace;background:var(--bg);padding:8px;border-radius:8px;white-space:pre-wrap}
 </style></head><body>
 <h1>⏰ Alarm+ <span class="mut" id="next"></span></h1>
+
+<div class="card" id="setup" style="display:none"></div>
 
 <div class="card" id="ring"><b>🔔 Ringing! Smile at the camera 😁</b>
  <div class="mut" id="score"></div><div class="bar"><i id="rbar"></i></div>
@@ -55,6 +61,7 @@ pre{max-height:220px;overflow:auto;font:12px ui-monospace,monospace;background:v
 
 <details class="card" id="setd"><summary>Settings</summary>
  <div class="mut" id="lockmsg" style="margin-top:6px"></div>
+ <div id="rstbar"><span id="rsttxt"></span> <button id="rstbtn" style="margin-left:6px">Restart now</button></div>
  <div id="setform"></div>
  <div class="row" style="margin-top:10px"><button id="setsave">Save to config.toml</button><button class="g" id="setreload">Reload file</button><button class="g" id="setreset">Restore defaults</button></div>
  <div class="mut" id="setmsg"></div>
@@ -117,7 +124,7 @@ async function pollSys(){
  $('mem').textContent=d.mem?d.mem.used_mb+'/'+d.mem.total_mb+' MB':'–';meter('memb',d.mem&&d.mem.percent);
  $('temp').textContent=d.cpu_temp_c==null?'–':d.cpu_temp_c+'°C';
  const net=Object.entries(d.network||{}).map(([k,v])=>k+': '+(v.reachable?'ok '+v.ms+' ms':'UNREACHABLE')).join(', ');
- const rows=[['host',d.hostname],['platform',d.platform],['python',d.python],['load 1/5/15',d.load&&d.load.join(' ')],['cpu cores',d.cpu_count],
+ const rows=[['running in Docker',d.in_docker?'yes':'no'],['device time',d.device_time+' ('+d.timezone+')'],['host',d.hostname],['platform',d.platform],['python',d.python],['load 1/5/15',d.load&&d.load.join(' ')],['cpu cores',d.cpu_count],
   ['power / throttling',d.throttled==null?'n/a':d.throttled.length?d.throttled.join(', '):'ok'],['service RSS',d.process_rss_mb&&d.process_rss_mb+' MB'],
   ['disk free',d.disk&&d.disk.free_mb+' MB ('+d.disk.percent+'% used)'],['host uptime',fmtS(d.host_uptime_s)],['service uptime',fmtS(d.service_uptime_s)],
   ['reachability',net||'–'],['audio now',d.audio.current],['audio players',d.audio.players.join(', ')||'none'],
@@ -131,32 +138,56 @@ async function pollSys(){
 $('sysd').ontoggle=()=>{clearInterval(sysTimer);if($('sysd').open){pollSys();sysTimer=setInterval(pollSys,2000)}};
 $('sndtest').onclick=()=>api('POST','/api/sound-test');
 
+// ---- First-run checklist ----
+async function loadSetup(){
+ const r=await fetch(q('/api/setup'));if(!r.ok)return;const d=await r.json();const el=$('setup');
+ const sym={ok:'✓',warn:'!',todo:'!',info:'i'};
+ const open=d.attention>0;
+ el.style.display='block';
+ el.innerHTML=`<details ${open?'open':''}><summary><b style="display:inline">${open?'Finish the setup ('+d.attention+')':'Setup ✓'}</b></summary>`+d.checks.map(c=>
+  `<div class="it"><span><span class="lv ${c.level}">${sym[c.level]}</span> <b style="display:inline">${esc(c.title)}</b><br><span class="mut">${esc(c.detail)}</span></span>${c.key&&c.level!='ok'?`<button class="g" onclick="openSettings('${c.key}')">Open</button>`:''}</div>`).join('')+'</details>'}
+function openSettings(key){$('setd').open=true;loadSettings(key)}
+
 // ---- Settings (rendered from the server's schema, so ranges/choices always match validation) ----
 let schema=[];
 function field(s){
  const id='s_'+s.key.replace('.','_'),dis=s.locked?'disabled':'',v=s.value;let input;
  if(s.type=='bool')input=`<input type=checkbox id=${id} ${v?'checked':''} ${dis}>`;
  else if(s.type=='choice')input=`<select id=${id} ${dis}>${s.choices.map(c=>`<option ${c==v?'selected':''}>${c}</option>`).join('')}</select>`;
- else if(s.type=='str')input=`<input type=text id=${id} value="${esc(v)}" ${dis}>`;
+ else if(s.type=='str')input=`<input type=${s.secret?'password':'text'} ${s.key=='audio.device'?'list=audiodevs':''} id=${id} value="${esc(v)}" ${dis} ${s.secret?'autocomplete=new-password':''}>${s.secret?`<label style="font-size:12px"><input type=checkbox onchange="$('${id}').type=this.checked?'text':'password'"> show</label>`:''}`;
  else input=`<input type=number id=${id} value=${v} min=${s.min} max=${s.max} step=${s.step||1} ${dis}>`;
  const range=s.type=='int'||s.type=='float'?` (${s.min}–${s.max})`:'';
- return `<label class="${s.locked?'lock':''} ${s.overridden?'ovr':''}" for=${id}>${s.key}${s.overridden?' •':''}</label>${input}<small>${s.help}${range}${s.locked?' — needs server.token':''}</small>`}
-async function loadSettings(){
+ return `<label class="${s.locked?'lock':''} ${s.overridden?'ovr':''}" for=${id}>${s.key}${s.overridden?' •':''}${s.restart?'<span class="badge">restart</span>':''}</label>${input}<small>${s.help}${range}${s.locked?' — needs server.token':''}</small>`}
+const GN={general:'General',server:'Access & network',camera:'Camera',smile:'Smile detection',audio:'Sound',moode:'Second speaker (moOde)',ring:'Ringing',logging:'Logging',hooks:'After-alarm commands',events:'Webhook'};
+function showRestart(on){$('rstbar').style.display=on?'block':'none';$('rsttxt').textContent='A change you made (marked "restart") applies after the service restarts.'}
+async function loadSettings(focus){
  const r=await api('GET','/api/settings');if(!r)return;schema=r.settings;
- $('lockmsg').textContent=r.locked?'Commands and webhook are read-only until server.token is set in config.toml (so nobody on your LAN can set a command).':'';
+ $('lockmsg').textContent=r.locked?'Commands and the webhook are read-only until you set an access token below (so nobody on your network can set a command).':'';
+ showRestart(r.restart_needed);
  const groups={};schema.forEach(s=>(groups[s.key.split('.')[0]]??=[]).push(s));
- $('setform').innerHTML=Object.entries(groups).map(([g,l])=>`<h3>${g}</h3><div class="set">${l.map(field).join('')}</div>`).join('')}
+ $('setform').innerHTML=Object.entries(groups).map(([g,l])=>`<h3>${GN[g]||g}</h3><div class="set">${l.map(field).join('')}</div>`).join('');
+ fetch(q('/api/audio-devices')).then(x=>x.json()).then(d=>{let dl=$('audiodevs');if(!dl){dl=document.createElement('datalist');dl.id='audiodevs';document.body.appendChild(dl)}
+  dl.innerHTML=d.devices.map(v=>`<option value="${esc(v.id)}">${esc(v.name)}</option>`).join('')}).catch(()=>{});
+ if(focus){const e=$('s_'+focus.replace('.','_'));if(e){e.scrollIntoView({block:'center'});e.focus()}}}
+$('rstbtn').onclick=async()=>{if(!confirm('Restart the service now? The page reconnects by itself.'))return;
+ const r=await api('POST','/api/restart');if(!r)return;$('rsttxt').textContent='Restarting…';
+ const port=window.__newPort||location.port;
+ for(let i=0;i<60;i++){await new Promise(x=>setTimeout(x,1500));try{const f=await fetch(location.protocol+'//'+location.hostname+':'+port+'/api/setup'+(token?'?token='+encodeURIComponent(token):''),{mode:'no-cors'});if(f.type=='opaque'||f.status<500){location.href=location.protocol+'//'+location.hostname+':'+port+'/';return}}catch(e){}}
+ $('rsttxt').textContent='The service did not come back within 90 s. Check the log (docker compose logs alarmplus).'};
 $('setd').ontoggle=()=>{if($('setd').open)loadSettings()};
 $('setsave').onclick=async()=>{
  const upd={};schema.filter(s=>!s.locked).forEach(s=>{const e=$('s_'+s.key.replace('.','_'));
   const v=s.type=='bool'?e.checked:s.type=='int'||s.type=='float'||(s.type=='choice'&&typeof s.choices[0]=='number')?(e.value===''?NaN:+e.value):e.value;if(v!==s.value)upd[s.key]=v});
  if(!Object.keys(upd).length){$('setmsg').textContent='Nothing changed.';return}
  const r=await fetch(q('/api/settings'),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(upd)});
- if(r.ok){$('setmsg').textContent='Saved to config.toml and applied. Camera/audio changes take effect on the next alarm or test.';loadSettings()}
+ if(r.ok){if('server.token' in upd){token=upd['server.token'];localStorage.setItem('tok',token)}
+  if('server.port' in upd)window.__newPort=String(upd['server.port']);
+  $('setmsg').textContent='Saved and applied. Camera/sound changes take effect on the next alarm or test.';loadSettings();loadSetup()}
  else{let t=await r.text();try{t=Object.entries(JSON.parse(t)).map(([k,m])=>k+': '+m).join('; ')}catch(e){}$('setmsg').textContent='Not saved — '+t}};
 $('setreset').onclick=async()=>{if(confirm('Write the built-in default of every setting shown here into config.toml? (A copy is kept as config.toml.bak.)')){if(await api('DELETE','/api/settings')){$('setmsg').textContent='Defaults written to config.toml.';loadSettings()}}};
 $('setreload').onclick=async()=>{const r=await api('POST','/api/settings/reload');if(!r)return;const p=Object.entries(r.problems||{});$('setmsg').textContent=p.length?'Reloaded; ignored invalid values: '+p.map(([k,m])=>k+': '+m).join('; '):'Reloaded config.toml.';loadSettings()};
 
+loadSetup();
 load().then(()=>{const es=new EventSource(q('/api/events'));
  es.onmessage=e=>{const s=JSON.parse(e.data);render(s);if(s.state=='idle'&&s.next!==undefined)load()}});
 </script></body></html>

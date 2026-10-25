@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import random
+import re
 import shutil
 import signal
 import socket
@@ -37,13 +38,47 @@ def make_builtin_tone(path: Path):
     os.replace(tmp, path)
 
 
+_DEVICE_LINE = re.compile(r"^\s*'([^']+)'\s*\((.*)\)\s*$")
+
+
+def parse_devices(text: str) -> list[dict]:
+    """`mpv --audio-device=help` lines like  'alsa/plughw:CARD=x,DEV=0' (description)  ->  [{id, name}]."""
+    out = []
+    for line in text.splitlines():
+        m = _DEVICE_LINE.match(line)
+        if m and m.group(1) != "auto":
+            out.append({"id": m.group(1), "name": m.group(2)})
+    return out
+
+
+async def list_devices() -> list[dict]:
+    """Output devices mpv can use on this machine (inside a container: the ones passed in with /dev/snd)."""
+    mpv = shutil.which("mpv")
+    if not mpv:
+        return []
+    try:
+        p = await asyncio.create_subprocess_exec(mpv, "--audio-device=help", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(p.communicate(), 8)
+    except Exception:
+        return []
+    return parse_devices(out.decode(errors="replace"))
+
+
+def _useful_stderr(text: str) -> str:
+    """The last meaningful lines of a player's stderr: drop JACK/PipeWire config chatter that buries the real reason."""
+    noise = ("jack", "pw.conf", "client.conf", "server socket", "request channel")
+    lines = [l.strip() for l in text.splitlines() if l.strip() and not any(n in l.lower() for n in noise)]
+    return " | ".join(lines[-4:])[-300:]
+
+
 class LocalPlayer:
     def __init__(self, sound: str, device: str = ""):
         self.sound, self.device, self.proc = sound, device, None
 
     def _command(self, volume: int) -> list[str]:
         if mpv := shutil.which("mpv"):
-            return [mpv, "--no-video", "--really-quiet", "--loop=inf", f"--volume={volume}",
+            # --msg-level=all=error keeps mpv quiet but lets the real reason through; --ao skips JACK/SDL, which only add noise and delay
+            return [mpv, "--no-video", "--msg-level=all=error,statusline=no", "--ao=pipewire,pulse,alsa", "--loop=inf", f"--volume={volume}",
                     f"--input-ipc-server={MPV_SOCK}", *([f"--audio-device={self.device}"] if self.device else []), self.sound]
         if ff := shutil.which("ffplay"):
             return [ff, "-nodisp", "-loglevel", "quiet", "-loop", "0", self.sound]
@@ -54,12 +89,13 @@ class LocalPlayer:
 
     async def start(self, volume: int):
         self.proc = await asyncio.create_subprocess_exec(
-            *self._command(volume), stderr=asyncio.subprocess.PIPE, start_new_session=(os.name == "posix"))
+            *self._command(volume), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,  # mpv reports errors on stdout
+            start_new_session=(os.name == "posix"))
         try:  # a player that dies at once (missing file, wrong device) would otherwise mean a silent alarm
             await asyncio.wait_for(self.proc.wait(), 0.6)
         except asyncio.TimeoutError:
             return  # still running: good
-        err = (await self.proc.stderr.read()).decode(errors="replace").strip()[-300:]
+        err = _useful_stderr((await self.proc.stdout.read()).decode(errors="replace"))
         code = self.proc.returncode
         self.proc = None
         raise RuntimeError(f"player exited at once (code {code}) for '{self.sound}'" + (f": {err}" if err else " (bad file or audio device?)"))
@@ -203,10 +239,19 @@ class Audio:
     async def _start_local(self, vol: int) -> bool:
         """Play the chosen sound; if that fails, the built-in tone; if that fails, the default device."""
         a, tone = self.cfg.audio, str(self.builtin)
-        for sound, device in dict.fromkeys([(self.current, a.device), (tone, a.device), (tone, "")]):
+        tried = list(dict.fromkeys([(self.current, a.device), (tone, a.device), (tone, "")]))
+        for sound, device in tried:
             if await self._try(LocalPlayer(sound, device), vol):
                 if (sound, device) != (self.current, a.device):
                     log.warning("alarm is playing '%s' on device '%s' instead of the configured sound/device", sound, device or "default")
+                return True
+        # Last resort: walk the machine's ALSA outputs. A Raspberry Pi with two HDMI ports often has a dead "default" (nothing plugged in)
+        # next to a working one, and a silent alarm is the worst outcome.
+        for dev in [d["id"] for d in await list_devices() if d["id"].startswith("alsa/plughw:")][:6]:
+            if any(dev == t[1] for t in tried):
+                continue
+            if await self._try(LocalPlayer(self.current, dev), vol) or await self._try(LocalPlayer(tone, dev), vol):
+                log.warning("the default output is not working; the alarm plays on '%s'. Set audio.device to that value to make it permanent.", dev)
                 return True
         return False
 
@@ -224,6 +269,8 @@ class Audio:
                     url = m.url
                 elif self.current.startswith("http"):
                     url = self.current
+                elif self.cfg.server.public_url:  # set when the detected address is wrong (Docker bridge networking, NAT)
+                    url = self.cfg.server.public_url.rstrip("/") + "/sound/current"
                 else:  # resolving the moOde host can block for seconds: keep it off the event loop
                     ip = await asyncio.get_running_loop().run_in_executor(None, _own_ip_towards, m.host)
                     url = f"http://{ip}:{self.cfg.server.port}/sound/current"

@@ -82,7 +82,7 @@ def test_camera_failure_is_reported_in_stats_and_logged_once(tmp_path, caplog):
         cam.acquire()
         import time
 
-        for _ in range(100):
+        for _ in range(300):  # generous: the full suite loads the machine
             if cam.stats()["cam_state"] == "error":
                 break
             time.sleep(0.1)

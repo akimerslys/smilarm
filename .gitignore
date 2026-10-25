@@ -4,3 +4,5 @@ data/
 config.toml
 .pio/
 secrets.h
+.env
+docker-compose.local.yml

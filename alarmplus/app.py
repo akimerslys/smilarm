@@ -4,20 +4,24 @@ import hmac
 import importlib.metadata as md
 import json
 import logging
+import os
+import signal
 import time
 from pathlib import Path
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 import cv2
 from aiohttp import web
 
+from . import clock
 from .audio import Audio
 from .camera import Camera
 from .engine import Engine
 from .settings import Settings
 from .smile import SmileGate
 from .store import Store
-from .sysinfo import LogBuffer, Sampler, tcp_ok
+from .sysinfo import LogBuffer, Sampler, in_docker, tcp_ok
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 TASKS = web.AppKey("tasks", list)
@@ -25,6 +29,7 @@ ENGINE = web.AppKey("engine", Engine)
 CAM = web.AppKey("cam", Camera)
 AUDIO = web.AppKey("audio", Audio)
 SETTINGS = web.AppKey("settings", Settings)
+RESTART = web.AppKey("restart", object)
 
 
 def annotate(img, score, thr, progress):
@@ -51,6 +56,15 @@ def build(cfg, config_path: str | None = None) -> web.Application:
     apply_level = lambda: logging.getLogger().setLevel(getattr(logging, cfg.logging.level, logging.INFO))  # noqa: E731
     apply_level()
     settings.listeners.append(apply_level)
+    det_key = [(cfg.smile.backend, cfg.smile.model)]
+
+    def reset_detector():
+        key = (cfg.smile.backend, cfg.smile.model)
+        if key != det_key[0] and not engine_ref[0].ringing:  # picked up by the next ring / smile test
+            det_key[0], engine_ref[0].detector = key, None
+            log.info("smile detector settings changed: will reload (%s)", key[0])
+    engine_ref = [None]
+    settings.listeners.append(reset_detector)
     log = logging.getLogger("app")
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)  # per-request lines are replaced by the access_log middleware
     store = Store(data / "alarms.json")
@@ -59,6 +73,7 @@ def build(cfg, config_path: str | None = None) -> web.Application:
     cam = Camera(cfg.camera.source, cfg.camera.quality, cfg.camera.width, cfg.camera.rotate, cfg.camera.flashlight, cfg.camera.flashlight_level)
     settings.listeners.append(lambda: cam.reconfigure(cfg.camera.source, cfg.camera.quality, cfg.camera.width, cfg.camera.rotate, cfg.camera.flashlight, cfg.camera.flashlight_level))
     engine = Engine(cfg, store, audio, cam)
+    engine_ref[0] = engine
     probe = {"active": False, "stats": {}, "sound": False}
 
     @web.middleware
@@ -117,9 +132,13 @@ def build(cfg, config_path: str | None = None) -> web.Application:
             raise web.HTTPNotFound()
         return web.FileResponse(p)
 
+    def sp(**extra):
+        return web.json_response({"settings": settings.describe(), "locked": settings.locked,
+                                  "restart_needed": settings.restart_needed, **extra})
+
     @r.get("/api/settings")
     async def get_settings(_):
-        return web.json_response({"settings": settings.describe(), "locked": settings.locked})
+        return sp()
 
     @r.put("/api/settings")
     async def put_settings(req):
@@ -131,13 +150,13 @@ def build(cfg, config_path: str | None = None) -> web.Application:
             raise web.HTTPBadRequest(text=json.dumps(e.args[0]) if isinstance(e.args[0], dict) else str(e))
         except OSError as e:
             raise web.HTTPInternalServerError(text=f"could not write {settings.path}: {e}")
-        return web.json_response({"settings": settings.describe(), "locked": settings.locked, "file": str(settings.path)})
+        return sp(file=str(settings.path))
 
     @r.post("/api/settings/reload")
     async def reload_settings(_):
         """Re-read config.toml after it was edited by hand."""
         problems = settings.reload()
-        return web.json_response({"settings": settings.describe(), "locked": settings.locked, "problems": problems})
+        return sp(problems=problems)
 
     @r.delete("/api/settings")
     async def restore_defaults(_):
@@ -145,7 +164,7 @@ def build(cfg, config_path: str | None = None) -> web.Application:
             settings.restore_defaults()
         except OSError as e:
             raise web.HTTPInternalServerError(text=f"could not write {settings.path}: {e}")
-        return web.json_response({"settings": settings.describe(), "locked": settings.locked})
+        return sp()
 
     @r.get("/api/logs")
     async def logs(req):
@@ -165,15 +184,61 @@ def build(cfg, config_path: str | None = None) -> web.Application:
                 checks["moode"] = await tcp_ok(cfg.moode.host, cfg.moode.port)
             net["v"] = {k: {"reachable": ok, "ms": ms} for k, (ok, ms) in checks.items()}
         vers = {}
-        for pkg in ("aiohttp", "mediapipe", "opencv-python-headless", "opencv-contrib-python"):
+        for pkg in ("aiohttp", "mediapipe", "opencv-contrib-python", "opencv-python-headless", "opencv-python"):
             try:
                 vers[pkg] = md.version(pkg)
             except md.PackageNotFoundError:
                 pass
         return web.json_response({
-            **await sampler.snapshot(), "network": net["v"], "versions": vers, "last_alarm": engine.last,
+            **await sampler.snapshot(), "in_docker": in_docker(), "device_time": clock.now(cfg).isoformat(timespec="seconds"),
+            "timezone": cfg.general.timezone or "system default", "network": net["v"], "versions": vers, "last_alarm": engine.last,
             "hooks": engine.hook_log, "audio": {"current": audio.current, "players": [type(p).__name__ for p in audio.players]},
         })
+
+    @r.get("/api/audio-devices")
+    async def audio_devices(_):
+        """Output devices the player can use here; the Settings page offers them for audio.device."""
+        from .audio import list_devices
+
+        return web.json_response({"devices": await list_devices()})
+
+    @r.post("/api/restart")
+    async def restart(_):
+        """Needed after changing server.host / server.port. The supervisor (Docker, systemd) starts the process again."""
+        if engine.ringing:
+            raise web.HTTPConflict(text="an alarm is ringing: restart after it ends")
+        log.warning("restart requested from the web UI")
+        asyncio.get_running_loop().call_later(0.5, app[RESTART])
+        return web.json_response({"ok": True})
+
+    @r.get("/api/setup")
+    async def setup(_):
+        """A short checklist for the UI's first-run card: what still needs the user's attention."""
+        cs, checks = urlparse(str(cam.source)), []
+        local_utc = datetime.now().astimezone().utcoffset() == timedelta(0)
+        if not cfg.general.timezone and (in_docker() or local_utc):
+            checks.append({"id": "timezone", "level": "warn", "key": "general.timezone", "title": "Set your timezone",
+                           "detail": "The device clock is on UTC, so a 07:00 alarm would ring at 07:00 UTC."})
+        else:
+            checks.append({"id": "timezone", "level": "ok", "title": "Timezone", "detail": cfg.general.timezone or "system default"})
+        if cs.hostname == "alarmcam.local":
+            checks.append({"id": "camera", "level": "todo", "key": "camera.source", "title": "Set the camera address",
+                           "detail": "Still the placeholder. Enter http://<camera-ip>:81/stream (or 0 for a USB camera)."})
+        elif cam.state == "error":
+            checks.append({"id": "camera", "level": "warn", "key": "camera.source", "title": "Camera problem", "detail": cam.error})
+        else:
+            checks.append({"id": "camera", "level": "ok", "title": "Camera", "detail": str(cam.source)})
+        backend = type(engine.detector).__name__ if engine.detector else None
+        if backend == "HaarDetector":
+            checks.append({"id": "detector", "level": "warn", "key": "smile.backend", "title": "Simple smile detector in use",
+                           "detail": "MediaPipe could not be loaded (see the log). Haar works but is less accurate."})
+        else:
+            checks.append({"id": "detector", "level": "ok", "title": "Smile detector", "detail": backend or "loading..."})
+        checks.append({"id": "audio", "level": "ok", "title": "Sound", "detail": f"{cfg.audio.backend}; press Test sound in System & debug to hear it"})
+        checks.append({"id": "token", "level": "ok" if cfg.server.token else "info", "key": "server.token", "title": "Access token",
+                       "detail": "set" if cfg.server.token else "Not set: anyone on your network can use this page. Recommended."})
+        needs = [c for c in checks if c["level"] in ("todo", "warn")]
+        return web.json_response({"checks": checks, "attention": len(needs), "in_docker": in_docker(), "restart_needed": settings.restart_needed})
 
     @r.post("/api/sound-test")
     async def sound_test(_):
@@ -390,6 +455,7 @@ def build(cfg, config_path: str | None = None) -> web.Application:
 
     app = web.Application(middlewares=[access_log, auth])
     app[ENGINE], app[CAM], app[AUDIO], app[SETTINGS] = engine, cam, audio, settings
+    app[RESTART] = lambda: os.kill(os.getpid(), signal.SIGTERM)  # replaceable in tests
     app.add_routes(r)
     app.on_startup.append(on_start)
     app.on_cleanup.append(on_stop)

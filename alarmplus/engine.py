@@ -3,11 +3,11 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime
 from pathlib import Path
 
 import aiohttp
 
+from . import clock
 from .smile import SmileGate, make_detector
 
 log = logging.getLogger("engine")
@@ -71,7 +71,7 @@ class Engine:
             return
         try:
             self._http = self._http or aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5))
-            await self._http.post(url, json={"source": "alarm-plus", "event": event, "at": datetime.now().isoformat(timespec="seconds"), **data})
+            await self._http.post(url, json={"source": "alarm-plus", "event": event, "at": clock.now(self.cfg).isoformat(timespec="seconds"), **data})
         except Exception as e:
             log.warning("webhook failed: %s", e)
 
@@ -85,7 +85,7 @@ class Engine:
         env = {**os.environ, "ALARM_EVENT": name.removeprefix("on_"), "ALARM_ID": str(alarm.get("id", "")),
                "ALARM_LABEL": str(alarm.get("label", "")), "ALARM_TIME": str(alarm.get("time", "")),
                **{"ALARM_" + k.upper(): str(v) for k, v in extra.items()}}
-        rec = {"hook": name, "cmd": cmd, "at": datetime.now().isoformat(timespec="seconds")}
+        rec = {"hook": name, "cmd": cmd, "at": clock.now(self.cfg).isoformat(timespec="seconds")}
         try:
             p = await asyncio.create_subprocess_shell(
                 cmd, env=env, cwd=str(Path.home()), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
@@ -101,7 +101,7 @@ class Engine:
         self.hook_log = (self.hook_log + [rec])[-10:]
 
     def snapshot(self):
-        nxt = self.store.next(datetime.now())
+        nxt = self.store.next(clock.now(self.cfg))
         return {**self.state, "next": {"at": nxt[0].isoformat(timespec="minutes"), "id": nxt[1]["id"]} if nxt else None}
 
     def changed(self):
@@ -122,15 +122,16 @@ class Engine:
 
     async def run(self):
         while True:
-            nxt = self.store.next(datetime.now())
-            wait = 60.0 if not nxt else min(60.0, max(0.0, (nxt[0] - datetime.now()).total_seconds()))
+            now = clock.now(self.cfg)
+            nxt = self.store.next(now)
+            wait = 60.0 if not nxt else min(60.0, max(0.0, (nxt[0] - now).total_seconds()))
             try:
                 await asyncio.wait_for(self._wake.wait(), wait)
                 self._wake.clear()
                 continue
             except asyncio.TimeoutError:
                 pass
-            if nxt and datetime.now() >= nxt[0]:
+            if nxt and clock.now(self.cfg) >= nxt[0]:
                 try:
                     await self.ring(nxt[1])
                 except Exception:  # one failed alarm must never kill the scheduler
@@ -213,7 +214,7 @@ class Engine:
             self.store.update(alarm["id"], {"enabled": False})
         secs = round(time.monotonic() - t0)
         self.last = {"id": alarm.get("id"), "label": alarm.get("label", ""), "reason": outcome, "seconds": secs,
-                     "at": datetime.now().isoformat(timespec="seconds")}
+                     "at": clock.now(self.cfg).isoformat(timespec="seconds")}
         self._bg(self._emit("dismissed", alarm=alarm, reason=outcome, seconds=secs))
         self.run_hook("on_dismiss", alarm, reason=outcome, seconds=secs)
         log.info("alarm %s ended: %s after %ss", alarm.get("id"), outcome, secs)

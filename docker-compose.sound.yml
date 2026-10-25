@@ -1,0 +1,9 @@
+# This device's own speakers: HDMI, USB or I2S audio through /dev/snd (the same as `docker run --device /dev/snd --group-add audio`).
+# install.sh adds this file automatically when /dev/snd exists. Without sound hardware the container then plays only on remote
+# (moOde) speakers instead of failing to start. Choose the output in Settings -> audio.device.
+services:
+  alarmplus:
+    devices:
+      - /dev/snd:/dev/snd
+    group_add:
+      - audio

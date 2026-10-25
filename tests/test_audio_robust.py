@@ -125,3 +125,15 @@ def test_builtin_tone_write_is_atomic(tmp_path):
     p = tmp_path / "t.wav"
     audio.make_builtin_tone(p)
     assert p.exists() and not (tmp_path / "t.wav.tmp").exists()
+
+
+def test_player_error_text_drops_jack_noise_but_keeps_the_reason():
+    text = ("[ao/alsa] Playback open error: Unknown error 524\n"
+            "[ao] Failed to initialize audio driver 'alsa'\n"
+            "Cannot connect to server request channel\njack server is not running or cannot be started\n"
+            "JackShmReadWritePtr::~JackShmReadWritePtr - Init not done for -1, skipping unlock\n"
+            "[W][1.2] pw.conf | can't load config client.conf: No such file or directory\n")
+    out = audio._useful_stderr(text)
+    assert "Playback open error: Unknown error 524" in out and "Failed to initialize audio driver" in out
+    assert "jack" not in out.lower() and "client.conf" not in out
+    assert audio._useful_stderr("") == ""

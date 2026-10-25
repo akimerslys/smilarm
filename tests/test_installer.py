@@ -18,7 +18,7 @@ def decoded(r):
 
 def sh(code: str, **env):
     r = subprocess.run([BASH, "-c", f'. deploy/ui.sh; ui_init /dev/null 1; {code}'], cwd=ROOT, capture_output=True,
-                       env={**os.environ, **env}, timeout=60)
+                       env={**os.environ, "LC_ALL": "C", **env}, timeout=60)  # the C locale: ASCII bar, whatever the machine uses
     return decoded(r)
 
 
@@ -75,18 +75,18 @@ def test_demo_plain_run_lists_every_step_and_download():
     for step in ("System packages", "Python environment", "Python libraries", "Face-detection model", "Configuration", "System service", "Starting Alarm+"):
         assert step in r.stdout
     assert "Will download:" in r.stdout and "4 package(s), 2.0 MB" in r.stdout
-    assert "66.0 MB downloaded in 3 file(s)" in r.stdout and "3.8 MB downloaded" in r.stdout
+    assert "106.6 MB downloaded in 3 file(s)" in r.stdout and "3.8 MB downloaded" in r.stdout
     assert "Alarm+ is running" in r.stdout and "\x1b" not in r.stdout  # plain: no escape codes
 
 
 def test_demo_animated_run_shows_progress_bar_and_spinner():
-    r = run_demo("--no-edit", DEMO_DELAY="0.3", UI_FORCE_ANIM="1", TERM="xterm", LANG="en_US.UTF-8", COLUMNS="100")
+    r = run_demo("--no-edit", DEMO_DELAY="0.6", UI_FORCE_ANIM="1", TERM="xterm", LANG="en_US.UTF-8", COLUMNS="100")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "\r" in r.stdout  # redraws in place
     assert "%" in r.stdout and "ETA" in r.stdout and "█" in r.stdout  # real progress bar for the model download
     import re
 
-    assert re.search(r"downloading (aiohttp|opencv_python_headless|mediapipe)-[0-9.]+ \([0-9.]+ MB\)", r.stdout)  # live: what, and how big
+    assert re.search(r"downloading (aiohttp|opencv_contrib_python|mediapipe)-[0-9.]+ \([0-9.]+ MB\)", r.stdout)  # live: what, and how big
     assert "✔" in r.stdout
 
 
@@ -143,6 +143,8 @@ def test_uninstall_purge_backs_up_then_deletes(tmp_path):
         names = t.getnames()
         assert "data/alarms.json" in names and "config.toml" in names
         assert b"b2" in t.extractfile("data/alarms.json").read()  # the alarms really are in the backup
+    if os.name == "posix":
+        assert backups[0].stat().st_mode & 0o077 == 0, "the backup holds the access token: owner-only"
 
 
 def test_uninstall_purge_no_backup_and_idempotent(tmp_path):
@@ -170,3 +172,11 @@ def test_uninstall_openclaw_skill_only_when_asked(tmp_path):
 def test_uninstall_rejects_unknown_options(tmp_path):
     r = uninstall(fake_project(tmp_path), "--nuke")
     assert r.returncode == 2 and "unknown option" in r.stdout
+
+
+def test_native_demo_clean_cache_adds_a_last_step():
+    r = run_demo("--plain", "--no-edit", "--clean-cache")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[8/8] Clean the download caches" in r.stdout and "pip: files removed: 214, apt cache cleaned" in r.stdout
+    plain = run_demo("--plain", "--no-edit")
+    assert "Clean the download caches" not in plain.stdout and "[7/7]" in plain.stdout  # opt-in

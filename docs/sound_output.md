@@ -1,5 +1,12 @@
 # Sound output without moOde
 
+> **Docker (the default install):** the container plays through the host's sound hardware (`/dev/snd` is passed in by `docker-compose.sound.yml`, which `install.sh` adds automatically when the device has sound hardware).
+> Paths such as `audio.sound` and `audio.sound_dir` are paths **inside the container**. Put your files in the state volume, e.g.
+> `docker compose cp ./morning.mp3 alarmplus:/state/sounds/morning.mp3` (create the folder first:
+> `docker compose exec alarmplus mkdir -p /state/sounds`), then set `audio.sound_dir` to `/state/sounds` in Settings. List output
+> devices with `docker compose exec alarmplus mpv --audio-device=help`. Bluetooth speakers need a PulseAudio/PipeWire socket shared into the container (see [docker.md](docker.md#sound-from-the-container)) or the native install.
+> The `sudo systemctl`/`~/alarm-sounds` examples below are for the native install; in Docker use the commands above.
+
 By default Alarm+ plays the alarm on the same device that runs it (the Rpi5), using `mpv`.
 This page covers choosing the speaker, your own sounds, and volume.
 

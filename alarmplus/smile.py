@@ -52,16 +52,46 @@ class MediaPipeDetector:
         return (d["mouthSmileLeft"] + d["mouthSmileRight"]) / 2
 
 
-class HaarDetector:
-    """Zero-extra-dependency fallback (OpenCV cascades). Less accurate, binary score."""
+CASCADES = ("haarcascade_frontalface_default.xml", "haarcascade_smile.xml")
 
-    def __init__(self):
+
+def find_cascades(dirs) -> Path | None:
+    """First directory that holds both cascade files. (The OpenCV 5 wheels ship an empty cv2/data folder.)"""
+    for d in dirs:
+        p = Path(d)
+        if all((p / name).is_file() for name in CASCADES):
+            return p
+    return None
+
+
+def cascade_dirs() -> list[str]:
+    import os
+
+    dirs = []
+    try:
         import cv2
 
+        dirs.append(cv2.data.haarcascades)
+    except Exception:
+        pass
+    # the Docker image and the installer put a copy next to the face model
+    return dirs + [os.environ.get("ALARMPLUS_CASCADES", ""), "data/cascades", "/opt/models"]
+
+
+class HaarDetector:
+    """Fallback (OpenCV cascades) for when MediaPipe cannot load. Less accurate, binary score."""
+
+    def __init__(self, dirs=None):
+        import cv2
+
+        folder = find_cascades(cascade_dirs() if dirs is None else dirs)
+        if folder is None:  # fail loudly: an empty classifier would just never see a face, and the alarm would never stop
+            raise RuntimeError("the Haar cascade files (%s) were not found; reinstall, or use backend=mediapipe" % ", ".join(CASCADES))
         self._cv2 = cv2
-        p = cv2.data.haarcascades
-        self._face = cv2.CascadeClassifier(p + "haarcascade_frontalface_default.xml")
-        self._smile = cv2.CascadeClassifier(p + "haarcascade_smile.xml")
+        self._face = cv2.CascadeClassifier(str(folder / CASCADES[0]))
+        self._smile = cv2.CascadeClassifier(str(folder / CASCADES[1]))
+        if self._face.empty() or self._smile.empty():
+            raise RuntimeError(f"could not load the Haar cascade files from {folder}")
 
     def score(self, bgr) -> float | None:
         g = self._cv2.cvtColor(bgr, self._cv2.COLOR_BGR2GRAY)

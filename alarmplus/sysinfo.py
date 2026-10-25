@@ -47,6 +47,11 @@ def decode_throttled(v: int) -> list[str]:
     return [m for b, m in bits.items() if v >> b & 1]
 
 
+def in_docker() -> bool:
+    """True inside a container (the image sets ALARMPLUS_DOCKER=1; /.dockerenv covers other runtimes)."""
+    return os.environ.get("ALARMPLUS_DOCKER") == "1" or os.path.exists("/.dockerenv")
+
+
 class Sampler:
     def __init__(self, data_dir: str):
         self.data_dir = data_dir

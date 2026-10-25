@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Install Alarm+ on Raspberry Pi OS (Bookworm, 64-bit). Run from the project root as the normal user.
+# OPTIONAL native install of Alarm+ (systemd service + Python venv), for people who do not want Docker.
+# The recommended way is Docker: `bash install.sh` (see README). Use this one through `bash install.sh --native`.
+# Raspberry Pi OS (Bookworm, 64-bit). Run from the project root as the normal user.
 #
 #   bash deploy/install.sh              install; open config.toml in an editor; (re)start the service
 #   bash deploy/install.sh --no-edit    skip the editor (also skipped when there is no terminal)
+#   bash deploy/install.sh --clean-cache  afterwards free the download caches (pip + apt); a later update downloads again
 #   bash deploy/install.sh --plain      no animation (for logs); every step still prints its result
 #   bash deploy/install.sh --demo       simulate the whole run with fake downloads (preview the UI, installs nothing)
 #
@@ -11,13 +14,14 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 
-EDIT=1 PLAIN=0 DEMO=0
+EDIT=1 PLAIN=0 DEMO=0 CLEAN=0
 for a in "$@"; do
   case "$a" in
     --no-edit) EDIT=0 ;;
+    --clean-cache) CLEAN=1 ;;
     --plain) PLAIN=1 ;;
     --demo) DEMO=1 ;;
-    -h | --help) sed -n '2,9p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "unknown option: $a (see --help)"; exit 2 ;;
   esac
 done
@@ -40,6 +44,13 @@ real_service() {
   sed "s|@ROOT@|$ROOT|g; s|@USER@|$USER|g" deploy/alarmplus.service | sudo tee /etc/systemd/system/alarmplus.service >/dev/null &&
     sudo systemctl daemon-reload && sudo systemctl enable alarmplus && sudo systemctl restart alarmplus
 }
+real_clean_native() {
+  .venv/bin/pip cache purge 2>&1 || true # "Files removed: N"
+  sudo apt-get clean && echo "apt package cache cleaned"
+}
+demo_clean_native() { demo_line "Files removed: 214"; demo_line "apt package cache cleaned"; }
+hint_clean_native() { if [ "$1" = final ]; then echo "pip: $(grep -oE 'Files removed: [0-9]+|Cache is (already )?empty|No cache' "$2" | head -1 | tr 'A-Z' 'a-z'), apt cache cleaned"; else tail -n 1 "$2"; fi; }
+
 real_health() { # wait until the web server answers (200 = ok, 401 = up but a token is set)
   local port code i
   port=$(.venv/bin/python -c "from alarmplus import config; print(config.load('config.toml').server.port)" 2>/dev/null || echo 8080)
@@ -68,12 +79,12 @@ demo_apt() {
 demo_pip() {
   demo_line "Collecting aiohttp>=3.9"
   demo_line "  Downloading aiohttp-3.9.5-cp311-cp311-manylinux_2_17_aarch64.whl (1.2 MB)"
-  demo_line "Collecting opencv-python-headless<5,>=4.9"
-  demo_line "  Downloading opencv_python_headless-4.10.0.84-cp37-abi3-manylinux_2_17_aarch64.whl (29.2 MB)"
+  demo_line "Collecting opencv-contrib-python<6,>=4.9"
+  demo_line "  Downloading opencv_contrib_python-5.0.0.93-cp37-abi3-manylinux_2_28_aarch64.whl (69.8 MB)"
   demo_line "Collecting mediapipe>=0.10.14"
   demo_line "  Downloading mediapipe-0.10.21-cp311-cp311-manylinux_2_28_aarch64.whl (35.6 MB)"
-  demo_line "Installing collected packages: aiohttp, opencv-python-headless, mediapipe"
-  demo_line "Successfully installed aiohttp mediapipe opencv-python-headless"
+  demo_line "Installing collected packages: aiohttp, opencv-contrib-python, mediapipe"
+  demo_line "Successfully installed aiohttp mediapipe opencv-contrib-python"
 }
 demo_download_setup() { # make `curl` a fake that "downloads" 3.8 MB slowly, so the real progress bar can be previewed
   DEMO_TMP=$(mktemp -d)
@@ -113,7 +124,7 @@ printf '  %-18s %s\n' "System packages" "$([ "${APT_PLAN_N:-0}" -gt 0 ] && echo 
 printf '  %-18s %s\n' "Python libraries" "sizes appear below as each file downloads (aiohttp, OpenCV, MediaPipe, ...)"
 printf '  %-18s %s\n\n' "Face model" "$([ -s data/face_landmarker.task ] && echo "nothing (already downloaded)" || ui_hsize "${MODEL_B:-0}")"
 
-ui_plan s1 s2 s3 s4 s5 s6 s7
+if [ "$CLEAN" = 1 ]; then ui_plan s1 s2 s3 s4 s5 s6 s7 s8; else ui_plan s1 s2 s3 s4 s5 s6 s7; fi
 T_ALL=$SECONDS
 
 # 1. system packages
@@ -132,7 +143,15 @@ else ui_run "Python libraries" hint_pip real_pip || exit 1; fi
 
 # 4. face model
 if [ "$DEMO" = 1 ]; then demo_download_setup; ui_download "Face-detection model" "$MODEL_URL" "$DEMO_TMP/model" || exit 1
-else ui_download "Face-detection model" "$MODEL_URL" data/face_landmarker.task || exit 1; fi
+else
+  ui_download "Face-detection model" "$MODEL_URL" data/face_landmarker.task || exit 1
+  # the OpenCV 5 wheels ship no Haar cascade files; the fallback detector needs them (2 small files, best effort)
+  mkdir -p data/cascades
+  for f in haarcascade_frontalface_default haarcascade_smile; do
+    [ -s "data/cascades/$f.xml" ] || curl -fsSL -o "data/cascades/$f.xml" "https://raw.githubusercontent.com/opencv/opencv/4.x/data/haarcascades/$f.xml" \
+      || printf '      %swarning: could not fetch %s.xml (only matters if MediaPipe cannot load)%s\n' "$C_DIM" "$f" "$C_OFF"
+  done
+fi
 
 # 5. configuration: generate every default, let the user edit, validate (an existing file is never overwritten)
 ui_note "Configuration"
@@ -157,6 +176,12 @@ else ui_run "System service" hint_plain real_service || exit 1; fi
 # 7. health check
 if [ "$DEMO" = 1 ]; then ui_run "Starting Alarm+" hint_health demo_health || exit 1
 else ui_run "Starting Alarm+" hint_health real_health || exit 1; fi
+
+# 8. optional: free the download caches (pip wheels, apt packages). They are only needed to re-install faster.
+if [ "$CLEAN" = 1 ]; then
+  if [ "$DEMO" = 1 ]; then ui_run "Clean the download caches" hint_clean_native demo_clean_native || exit 1
+  else ui_run "Clean the download caches" hint_clean_native real_clean_native || exit 1; fi
+fi
 
 PORT=8080
 [ "$DEMO" = 0 ] && PORT=$(.venv/bin/python -c "from alarmplus import config; print(config.load('config.toml').server.port)" 2>/dev/null || echo 8080)

@@ -4,6 +4,7 @@ import wave
 import pytest
 
 from alarmplus import audio, config
+from alarmplus import smile
 from alarmplus.smile import HaarDetector, make_detector
 
 
@@ -121,14 +122,19 @@ def test_mpd_ack_error_is_reported():
 
 
 # ---- detector selection ----
+HAS_CASCADES = smile.find_cascades(smile.cascade_dirs()) is not None  # not true for a bare OpenCV 5 install (see test_haar_files)
+
+
 def test_detector_selection(tmp_path):
     missing = str(tmp_path / "nope.task")
-    assert isinstance(make_detector("auto", missing), HaarDetector)
-    assert isinstance(make_detector("haar", missing), HaarDetector)
+    if HAS_CASCADES:
+        assert isinstance(make_detector("auto", missing), HaarDetector)
+        assert isinstance(make_detector("haar", missing), HaarDetector)
     with pytest.raises(FileNotFoundError):
         make_detector("mediapipe", missing)
 
 
+@pytest.mark.skipif(not HAS_CASCADES, reason="no cascade files in this environment")
 def test_haar_returns_none_without_face():
     import numpy as np
 

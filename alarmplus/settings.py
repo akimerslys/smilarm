@@ -12,6 +12,7 @@ import re
 import shutil
 from pathlib import Path
 
+from . import clock
 from . import config as config_mod
 from .audio import SOUND_EXT
 
@@ -20,6 +21,8 @@ log = logging.getLogger("settings")
 _HOST = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 _DEVICE = re.compile(r"^[\w:/.,@=+\-]{0,80}$")
 _URL = re.compile(r"^https?://[^\s]+$")
+_ORIGIN = re.compile(r"^https?://[A-Za-z0-9._-]+(:[0-9]{1,5})?/?$")
+_TOKEN = re.compile(r"^[!-~]{0,128}$")
 
 
 def _f(key, type_, help_, **kw):
@@ -27,6 +30,13 @@ def _f(key, type_, help_, **kw):
 
 
 SCHEMA = [
+    _f("general.timezone", "str", "Your timezone, e.g. Europe/London or America/New_York. Alarm times use it. Empty = the device's own timezone (a container is usually UTC!)."),
+    _f("server.host", "str", "Interface the web UI listens on (0.0.0.0 = the whole network). Needs a restart.", restart=True),
+    _f("server.port", "int", "Web UI / API port. Needs a restart (in Docker with the default host networking this is the port directly).", min=1, max=65535, restart=True),
+    _f("server.token", "str", "Access token. Empty = open to the whole network. Once set, the UI asks for it and every API call needs it (Bearer token or ?token=). Required to edit commands and the webhook. Printable characters, no spaces, max 128.", secret=True),
+    _f("server.public_url", "str", "Address other devices (the moOde speaker) use to reach this app, e.g. http://192.168.1.20:8080. Empty = detected automatically (wrong inside Docker bridge networking)."),
+    _f("smile.backend", "choice", "Smile detector: auto (MediaPipe, falling back to OpenCV Haar), mediapipe, or haar (less accurate, no model file).", choices=["auto", "mediapipe", "haar"]),
+    _f("smile.model", "str", "MediaPipe face-landmarker model file. Normally leave as is."),
     _f("smile.threshold", "float", "Smile score needed to count as smiling (lower = easier).", min=0.1, max=0.95, step=0.01),
     _f("smile.hold_seconds", "float", "How long the smile must be held.", min=0.5, max=10, step=0.1),
     _f("smile.fps", "int", "Detections per second while ringing.", min=1, max=15),
@@ -34,6 +44,7 @@ SCHEMA = [
     _f("camera.rotate", "choice", "Rotate the picture clockwise so faces are upright (sideways camera: try 90, else 270).", choices=[0, 90, 180, 270]),
     _f("camera.flashlight", "bool", "Switch the ESP32 flash LED on while the camera is in use (alarm ringing, Camera view, Smile test). Needs the current firmware."),
     _f("camera.flashlight_level", "int", "Flash LED brightness, percent. It is very bright and gets warm: stay low for long alarms.", min=1, max=100),
+    _f("camera.width", "int", "Width frames are scaled to for detection; 0 = take it from the quality preset.", min=0, max=1920),
     _f("camera.source", "str", "ESP32 stream URL (http://IP:81/stream) or a local camera index like 0."),
     _f("audio.backend", "choice", "Where the alarm sound plays.", choices=["local", "moode", "both"]),
     _f("audio.volume_start", "int", "Starting volume, %.", min=0, max=100),
@@ -50,7 +61,7 @@ SCHEMA = [
     _f("ring.max_minutes", "float", "Failsafe: stop ringing after this many minutes.", min=1, max=120, step=1),
     _f("ring.allow_manual_dismiss", "bool", "Allow dismissing without a smile (defeats the purpose)."),
     _f("ring.camera_fail_seconds", "int", "Camera silent this long = manual dismiss unlocked.", min=5, max=600),
-    _f("logging.level", "choice", "Log detail for journalctl and the web UI log: DEBUG adds per-second detection and camera numbers.", choices=["DEBUG", "INFO", "WARNING"]),
+    _f("logging.level", "choice", "Log detail for the web UI log and `docker compose logs` / journalctl: DEBUG adds per-second detection and camera numbers.", choices=["DEBUG", "INFO", "WARNING"]),
     _f("hooks.on_ring", "str", "Shell command run on this device when an alarm starts.", sensitive=True),
     _f("hooks.on_dismiss", "str", "Shell command run on this device when an alarm ends.", sensitive=True),
     _f("hooks.timeout_seconds", "int", "Kill a hook that runs longer than this.", min=1, max=600, sensitive=True),
@@ -93,6 +104,23 @@ def validate(key: str, v):
     if key.startswith("hooks."):
         if len(v) > 500:
             raise ValueError("max 500 characters")
+    elif key == "general.timezone":
+        if v and not clock.valid_timezone(v):
+            raise ValueError("unknown timezone; use an IANA name such as Europe/London or America/New_York, or leave empty")
+    elif key == "server.host":
+        if not _HOST.match(v):
+            raise ValueError("must be an IP address or hostname, e.g. 0.0.0.0")
+    elif key == "server.token":
+        if not _TOKEN.match(v):
+            raise ValueError("up to 128 printable characters, no spaces")
+    elif key == "server.public_url":
+        if v and not _ORIGIN.match(v):
+            raise ValueError("must look like http://192.168.1.20:8080 (scheme, host, optional port, no path)")
+    elif key == "smile.model":
+        if v != config_mod.DEFAULTS["smile"]["model"] and not Path(v).expanduser().is_file():  # the default is fetched by the installer/image
+            raise ValueError("model file not found on this device")
+        if not v:
+            raise ValueError("a path is required (the default is data/face_landmarker.task)")
     elif key == "camera.source":
         if not (v.isdigit() or _URL.match(v)):
             raise ValueError("must be a camera index (0, 1, ...) or an http(s) URL")
@@ -124,6 +152,7 @@ class Settings:
         self.cfg, self.path = cfg, Path(path)
         self.defaults = copy.deepcopy(config_mod.DEFAULTS)
         self.listeners = []
+        self._boot = {k: self._get(k) for k, s in BY_KEY.items() if s.get("restart")}  # values the running process started with
         if legacy_json and legacy_json.exists():
             self._migrate(legacy_json)
 
@@ -140,6 +169,11 @@ class Settings:
     def locked(self) -> bool:
         """Sensitive settings (commands, webhook) need an API token so the LAN can't set them."""
         return not self.cfg.server.token
+
+    @property
+    def restart_needed(self) -> bool:
+        """True when a setting that is only read at start was changed since this process began."""
+        return any(self._get(k) != v for k, v in self._boot.items())
 
     def _notify(self):
         for fn in self.listeners:

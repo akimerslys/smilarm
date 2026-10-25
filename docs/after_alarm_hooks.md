@@ -1,5 +1,9 @@
 # Running your own script when an alarm starts or ends
 
+> **Docker (the default install):** the command runs **inside the container**, not on the host. `ssh` is installed there; keep the keys and
+> your scripts in the `/state` volume. The step-by-step (key generation, `ssh-copy-id`, an example hook line) is in
+> [docker.md](docker.md#hooks-that-ssh-to-other-devices). The text below applies to both installs; "the Rpi5" means the device running Alarm+.
+
 Alarm+ can run a shell command when an alarm **starts** (`hooks.on_ring`) and when it **ends**
 (`hooks.on_dismiss`). The command runs **on the device that runs Alarm+** (the Rpi5), as the service user,
 in that user's home directory. It never blocks the alarm: it is started in the background.

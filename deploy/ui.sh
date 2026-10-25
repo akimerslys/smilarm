@@ -112,6 +112,24 @@ hint_apt() {
 # last line of the step output as the summary, nothing while running
 hint_plain() { if [ "$1" = final ]; then tail -n 1 "$2"; fi; }
 
+# hint_docker live|final FILE — `docker compose --progress=plain build` output: lines look like "#9 12.3 Downloading x.whl (35 MB)"
+hint_docker() {
+  local clean="$2.clean" last
+  sed -E 's/^#[0-9]+ ([0-9.]+ )?//' "$2" 2>/dev/null >"$clean"
+  if [ "$1" = final ]; then
+    local pb pn ab an
+    read -r pb pn < <(ui_sum_pip "$clean")
+    read -r ab an < <(ui_sum_apt "$clean")
+    if [ $((${pn:-0} + ${an:-0})) -gt 0 ]; then echo "$(ui_hsize $((${pb:-0} + ${ab:-0}))) downloaded in $((${pn:-0} + ${an:-0})) file(s)"
+    else echo "built (cached layers reused, nothing new to download)"; fi
+    return
+  fi
+  if grep -qE 'Downloading ' "$clean"; then hint_pip live "$clean"; return; fi
+  if grep -qE '^Get:[0-9]+ ' "$clean"; then hint_apt live "$clean"; return; fi
+  last=$(grep -vE '^\s*$' "$clean" | tail -n 1)
+  echo "${last:-starting…}"
+}
+
 # ---- steps --------------------------------------------------------------------------------------
 
 ui_plan() { STEP_TOTAL=$#; STEP_N=0; }

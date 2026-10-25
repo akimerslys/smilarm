@@ -1,4 +1,5 @@
 aiohttp>=3.9
-opencv-python-headless>=4.9,<5  # 5.x dropped CascadeClassifier (Haar fallback)
+opencv-contrib-python>=4.9,<6  # the very package mediapipe depends on: ONE OpenCV copy (headless + contrib doubled it, ~150 MB)
 numpy
+tzdata  # timezone database (slim containers and Windows have none)
 mediapipe>=0.10.14

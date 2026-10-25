@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Remove Alarm+ from this machine. Safe by default: it asks before deleting anything you may want to keep.
+# Remove the NATIVE (non-Docker) install of Alarm+. For the Docker install use `bash uninstall.sh` (it finds both).
+# Safe by default: it asks before deleting anything you may want to keep.
 #
 #   bash deploy/uninstall.sh                  interactive: stop + remove the service and .venv, then ask about
 #                                             your data (alarms, config.toml), the OpenClaw skill and system packages
@@ -121,6 +122,7 @@ do_data() {
     [ -d data ] && files+=(data)
     [ -f config.toml ] && files+=(config.toml)
     act tar -czf "$out" "${files[@]}" || return 1
+    act chmod 600 "$out" # the config holds your access token
     echo "${DRYTAG}backup: $out"
   fi
   act rm -rf data config.toml config.toml.bak config.toml.tmp
