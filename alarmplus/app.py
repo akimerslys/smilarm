@@ -66,6 +66,7 @@ def build(cfg, config_path: str | None = None) -> web.Application:
     engine_ref = [None]
     settings.listeners.append(reset_detector)
     log = logging.getLogger("app")
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)  # mediapipe imports it: "generated new fontManager" is noise
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)  # per-request lines are replaced by the access_log middleware
     store = Store(data / "alarms.json")
     builtin = data / "alarm.wav"
@@ -74,7 +75,7 @@ def build(cfg, config_path: str | None = None) -> web.Application:
     settings.listeners.append(lambda: cam.reconfigure(cfg.camera.source, cfg.camera.quality, cfg.camera.width, cfg.camera.rotate, cfg.camera.flashlight, cfg.camera.flashlight_level))
     engine = Engine(cfg, store, audio, cam)
     engine_ref[0] = engine
-    probe = {"active": False, "stats": {}, "sound": False}
+    probe = {"active": False, "stats": {}, "sound": False, "stop": None}
 
     @web.middleware
     async def auth(request, handler):
@@ -120,6 +121,10 @@ def build(cfg, config_path: str | None = None) -> web.Application:
     @r.get("/")
     async def index(_):
         return web.FileResponse(WEB / "index.html")
+
+    @r.get("/favicon.ico")
+    async def favicon(_):
+        return web.Response(status=204)  # the page ships an inline icon; browsers still ask for this file
 
     @r.get("/sound/alarm.wav")
     async def sound(_):
@@ -292,9 +297,20 @@ def build(cfg, config_path: str | None = None) -> web.Application:
     async def smile_test(req):
         """Live annotated camera view. Streaming runs at camera speed; detection runs beside it on
         the newest frame, so a slow detector never makes the picture lag. Numbers: /api/debug."""
-        if engine.ringing or probe["active"]:
-            raise web.HTTPConflict(text="alarm ringing or smile test already running")
+        if engine.ringing:
+            raise web.HTTPConflict(text="an alarm is ringing: the camera belongs to it")
+        if probe["active"]:
+            # A forgotten or stalled stream (a closed tab, a camera that stopped sending) must not lock you out: the newest request
+            # takes over. Never two at once, because the camera and the detector are single-user.
+            probe["stop"].set()
+            for _ in range(60):
+                if not probe["active"]:
+                    break
+                await asyncio.sleep(0.05)
+            if probe["active"]:
+                raise web.HTTPConflict(text="another smile test is still shutting down; try again")
         probe["active"] = True
+        probe["stop"] = stop = asyncio.Event()
         probe["stats"] = {"updated": time.monotonic()}
         log.info("smile test started (threshold %s, hold %ss)", cfg.smile.threshold, cfg.smile.hold_seconds)
         try:
@@ -342,10 +358,12 @@ def build(cfg, config_path: str | None = None) -> web.Application:
             task = asyncio.create_task(detect())
             try:
                 last = 0.0
-                while True:
+                # The client closing the page is noticed here, not only by a failed write: with a stalled camera nothing is written for
+                # a long time and the handler (and the "already running" lock) would otherwise live forever.
+                while not stop.is_set() and req.transport is not None and not req.transport.is_closing():
                     f, ts = cam.latest()
                     if f is None or ts == last:
-                        await asyncio.sleep(0.01)
+                        await asyncio.sleep(0.05)
                         continue
                     last, t0 = ts, time.monotonic()
                     img = annotate(f.copy(), verdict["score"], sm.threshold, verdict["progress"])
@@ -422,7 +440,7 @@ def build(cfg, config_path: str | None = None) -> web.Application:
         cam.acquire()
         last = 0.0
         try:
-            while True:
+            while req.transport is not None and not req.transport.is_closing():  # also ends when the camera is silent and nothing gets written
                 f, ts = cam.latest()
                 if f is not None and ts != last:
                     last = ts

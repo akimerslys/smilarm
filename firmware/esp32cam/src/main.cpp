@@ -33,6 +33,7 @@
 #define FLASH_GPIO 4
 #define FLASH_CH 2  // LEDC channel; the camera clock uses channel 0 / timer 0
 static bool flash_on = false;
+static int flash_level_now = 0;  // current PWM value, so the LED can be ramped up
 static uint32_t flash_off_at = 0;
 
 static void flash_set(int level) {
@@ -42,7 +43,12 @@ static void flash_set(int level) {
   ledcWrite(FLASH_CH, level);
 #endif
   flash_on = level > 0;
+  flash_level_now = level;
 }
+
+// Cap the stream at ~15 fps. Smile detection needs a handful of frames per second; 50+ fps only loads the Wi-Fi radio and the power
+// supply, and an overloaded ESP32-CAM (especially with the flash LED on) can brown out and drop off the network for minutes.
+#define STREAM_MIN_FRAME_MS 66
 
 static const char *BOUNDARY = "\r\n--frame\r\n";
 
@@ -53,6 +59,7 @@ static esp_err_t stream_handler(httpd_req_t *req) {
   // complete the moment it is sent instead of one frame later.
   if (httpd_resp_send_chunk(req, BOUNDARY, strlen(BOUNDARY)) != ESP_OK) return ESP_FAIL;
   while (true) {
+    uint32_t t_frame = millis();
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) return ESP_FAIL;
     size_t n = snprintf(hdr, sizeof hdr, "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
@@ -61,6 +68,8 @@ static esp_err_t stream_handler(httpd_req_t *req) {
     if (r == ESP_OK) r = httpd_resp_send_chunk(req, BOUNDARY, strlen(BOUNDARY));
     esp_camera_fb_return(fb);
     if (r != ESP_OK) return r;  // client left
+    uint32_t spent = millis() - t_frame;
+    if (spent < STREAM_MIN_FRAME_MS) vTaskDelay((STREAM_MIN_FRAME_MS - spent) / portTICK_PERIOD_MS);
   }
 }
 
@@ -95,6 +104,11 @@ static esp_err_t control_handler(httpd_req_t *req) {
     int level = constrain(atoi(v), 0, 255);
     int secs = 180;
     if (httpd_query_key_value(q, "for", t, sizeof t) == ESP_OK) secs = constrain(atoi(t), 1, 7200);
+    // Soft start: jumping straight to full power is a current spike that can brown the board out (and take Wi-Fi down with it).
+    for (int v = flash_level_now + 20; v < level; v += 20) {
+      flash_set(v);
+      delay(20);
+    }
     flash_set(level);
     flash_off_at = millis() + (uint32_t)secs * 1000UL;  // the Pi re-sends this every minute while it needs light
     did = true;

@@ -116,6 +116,7 @@ Relative paths in the file (`data_dir`, the model) are relative to the file itse
 | Smile never counts | **Smile test:** is a face found? If not, try `camera.rotate`; if the score stays below the threshold, lower `smile.threshold`. |
 | No sound | **Test sound**, then the log (`player exited at once …`); see [`docs/sound_output.md`](docs/sound_output.md). |
 | Nothing on the second speaker | `System & debug → reachability`, then [`docs/setup_moode_other_device.md`](docs/setup_moode_other_device.md) (in bridge networking set `server.public_url`). |
+| Camera drops off the network now and then ("no answer from 10.x.x.x:81", "No route to host"), often right after the flashlight turns on | The ESP32-CAM is power-starved. Use a 5 V / 2 A supply and a short cable, keep `camera.flashlight_level` low, and flash the current firmware (it caps the stream at ~15 fps and ramps the LED up). Alarm+ already sends the resolution only when it changes and switches the LED on only once video flows. |
 | Random freezes / reboots of the Pi or ESP32 | `throttled` in **System & debug**: under-voltage means a weak power supply. |
 | Container won't start / restarts | `docker compose logs alarmplus`; more in [`docs/docker.md`](docs/docker.md#troubleshooting). |
 

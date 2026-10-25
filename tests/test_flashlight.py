@@ -60,6 +60,7 @@ def esp():
 def make_cam(esp, **kw):
     c = Camera("http://127.0.0.1:81/stream", **kw)  # the video stream itself is irrelevant here
     c.control_port = esp.port
+    c.flash_wait_stream = False  # these tests have no video stream; the wait-for-video rule has its own test below
     return c
 
 
@@ -141,6 +142,7 @@ def test_unreachable_esp32_does_not_crash(caplog):
     port = e.port
     e.close()  # nothing listens any more
     c = Camera("http://127.0.0.1:81/stream", flash=True)
+    c.flash_wait_stream = False
     c.control_port = port
     c.acquire()
     assert wait_for(lambda: c.stats()["cam_flash"] == "error")
@@ -149,6 +151,7 @@ def test_unreachable_esp32_does_not_crash(caplog):
 
 def test_local_camera_has_no_flash():
     c = Camera("0", flash=True)
+    c.flash_wait_stream = False
     c.acquire()
     time.sleep(0.3)
     assert c.stats()["cam_flash"] == "off"
@@ -184,3 +187,47 @@ def test_web_settings_toggle_reaches_the_camera(tmp_path):
             assert d["cam_flash"] == "off" and d["cam_flash_error"] == ""  # enabled, but the camera isn't in use
 
     asyncio.run(main())
+
+
+# ---------------- stability on a weak board ----------------
+def test_flash_waits_until_video_flows(esp):
+    c = make_cam(esp, flash=True, flash_level=40)
+    c.flash_wait_stream = True
+    c.acquire()
+    time.sleep(1.0)
+    assert esp.leds == []  # no stream yet: no light, and no stacked current peak
+    c.state = "streaming"  # video arrives
+    assert wait_for(lambda: esp.leds[:1] == [102])
+    c.release()
+    assert wait_for(lambda: esp.leds[-1:] == [0])
+
+
+def test_flash_is_never_switched_on_for_a_stream_that_never_starts(esp, monkeypatch):
+    c = make_cam(esp, flash=True)
+    c.flash_wait_stream = True
+    monkeypatch.setattr(c, "_wait_for_video", lambda gen, stop, timeout=20.0: False)  # the wait times out
+    c.acquire()
+    time.sleep(0.6)
+    c.release()
+    time.sleep(0.4)
+    assert esp.leds == []  # nothing on, and (since nothing was on) no pointless "off" either
+
+
+def test_preset_is_sent_once_not_on_every_open(esp):
+    c = make_cam(esp, quality="medium")
+    presets = lambda: [p for p in esp.requests if "preset=" in p]
+    assert c._configure() is True and presets() == ["/control?preset=medium"]
+    assert c._configure() is False and len(presets()) == 1  # same preset: the sensor is not reinitialised again
+    c.reconfigure("http://127.0.0.1:81/stream", "high")
+    assert c._configure() is True and len(presets()) == 2  # a different preset is sent
+    c._forget_preset()  # the camera disappeared and came back at its default
+    assert c._configure() is True and len(presets()) == 3
+
+
+def test_failed_preset_is_retried_next_time():
+    e = FakeEsp()
+    port = e.port
+    e.close()
+    c = Camera("http://127.0.0.1:81/stream", quality="medium")
+    c.control_port = port
+    assert c._configure() is False and c._preset_applied is None  # not remembered as applied

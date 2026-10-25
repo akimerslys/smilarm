@@ -139,9 +139,11 @@ def test_debug_and_smile_test(tmp_path):
             d = await (await cl.get("/api/debug")).json()
             assert d["test_active"] and d["face"] and d["smiling"] and d["score"] == 0.9
             assert d["would_dismiss"] is True and d["frame_size"] == "320x240" and d["backend"] == "Det"
-            assert (await cl.get("/api/smile-test.mjpg")).status == 409  # one test at a time
+            r2 = await cl.get("/api/smile-test.mjpg")  # a second request takes over from the first (no lock-out by a stale tab)
+            assert r2.status == 200
+            r2.close()
             r.close()
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.5)
             app[ENGINE].ringing = True
             assert (await cl.get("/api/smile-test.mjpg")).status == 409  # never while ringing
             app[ENGINE].ringing = False

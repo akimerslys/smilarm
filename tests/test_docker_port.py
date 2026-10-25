@@ -110,8 +110,11 @@ def test_install_never_cleans_by_itself_but_mentions_a_big_cache(stub):  # noqa:
     assert r.returncode == 0
     assert not any("prune" in c for c in calls)  # opt-in only
     assert "3.132GB of build cache" in r.stdout and "--clean-only" in r.stdout  # but it says how to get the space back
-    r, _ = call("install.sh", STUB_CACHE="0B (0%)")
-    assert "build cache" not in r.stdout  # no nagging when there is nothing to free
+    for small in ("0B (0%)", "40.52MB (100%)", "499MB (90%)"):
+        r, _ = call("install.sh", STUB_CACHE=small)
+        assert "build cache" not in r.stdout, small  # no nagging for small amounts
+    r, _ = call("install.sh", STUB_CACHE="600MB (90%)")
+    assert "600MB of build cache" in r.stdout
 
 
 @needs_bash

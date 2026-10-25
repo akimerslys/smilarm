@@ -88,6 +88,8 @@ class Camera:
         self.flash_state, self.flash_error = "off", ""  # off | on | error
         self.control_port = 80  # the ESP32's control server (the stream itself is on 81)
         self._flash_gen = 0
+        self._preset_applied = None  # (source, quality) last sent to the ESP32
+        self.flash_wait_stream = True  # switch the LED on only once video is flowing (tests turn this off)
 
     @staticmethod
     def _check_rotate(rotate: int) -> int:
@@ -173,26 +175,48 @@ class Camera:
         elif self.flash_state == "error":
             self.flash_state, self.flash_error = "off", ""
 
+    def _wait_for_video(self, gen: int, stop: threading.Event, timeout: float = 20.0) -> bool:
+        """The LED only helps while frames arrive, and switching it on in the same instant the stream starts stacks two current/Wi-Fi
+        peaks on a small board (a brown-out takes the ESP32 offline for minutes). So wait until video flows."""
+        if not self.flash_wait_stream:
+            return True
+        end = time.monotonic() + timeout
+        while time.monotonic() < end and not stop.is_set() and gen == self._flash_gen:
+            if self.state == "streaming":
+                return True
+            stop.wait(0.1)
+        return False
+
     def _flash_loop(self, gen: int, stop: threading.Event):
-        level = self.flash_level
-        self._flash_call(level, gen)
+        if self._wait_for_video(gen, stop):
+            self._flash_call(self.flash_level, gen)
         while not stop.wait(FLASH_REFRESH) and gen == self._flash_gen:
-            level = self.flash_level
-            self._flash_call(level, gen)  # keep-alive: the ESP32 turns the LED off by itself if we stop talking
-        if gen == self._flash_gen:  # a newer loop (quick re-open) owns the LED: leave it alone
+            if self.state == "streaming" or not self.flash_wait_stream:
+                self._flash_call(self.flash_level, gen)  # keep-alive: the ESP32 turns the LED off by itself if we stop talking
+        if gen == self._flash_gen and self.flash_state != "off":  # a newer loop (quick re-open) owns the LED: leave it alone
             self._flash_call(0, gen)
 
-    def _configure(self):
+    def _configure(self) -> bool:
+        """Tell the ESP32 which resolution to use. Re-sending the same preset makes it reinitialise the sensor, which can stall the
+        stream for seconds (or worse), so it is only sent when it differs from what we last applied. Returns True if it was sent."""
         url = control_url(self.source, self.quality, self.control_port)
-        if not url:
-            return
+        if not url or self._preset_applied == (str(self.source), self.quality):
+            return False
         try:
             urllib.request.urlopen(url, timeout=3).read()
+            self._preset_applied = (str(self.source), self.quality)
+            return True
         except Exception as e:  # old firmware without /control: stream still works at its default
             log.warning("could not set camera preset %s: %s", self.quality, e)
+            return False
+
+    def _forget_preset(self):
+        """The camera went away (reboot, Wi-Fi loss): it comes back at its default resolution, so the preset must be sent again."""
+        self._preset_applied = None
 
     def _run(self, stop: threading.Event):
-        self._configure()
+        if self._configure():
+            stop.wait(1.0)  # let the sensor settle at its new size before opening the stream
         cap, fails, backoff, last_msg = None, 0, 1.0, ""
         while not stop.is_set():
             if cap is None:
@@ -209,8 +233,9 @@ class Camera:
                     self._reconnects += 1
                     msg = diagnose_source(self.source)
                     self.state, self.error = "error", msg
+                    self._forget_preset()
                     if msg != last_msg:  # say it once per distinct cause, not every retry
-                        log.warning("camera %s: %s (retrying every %.0f-10 s)", self.source, msg, backoff)
+                        log.warning("camera %s: %s (retrying, at most every 10 s)", self.source, msg)
                         last_msg = msg
                     else:
                         log.debug("camera still failing: %s", msg)

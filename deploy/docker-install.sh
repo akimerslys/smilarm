@@ -202,7 +202,13 @@ if [ "$START" = 1 ]; then
 fi
 if [ "$CLEAN" = 0 ] && [ "$DEMO" = 0 ]; then # tell the user when the build left a lot of cache behind (it is not needed to run Alarm+)
   cache=$($DC system df --format '{{.Type}}|{{.Reclaimable}}' 2>/dev/null | awk -F'|' '$1=="Build Cache"{print $2}')
-  case "$cache" in "" | 0B*) ;; *) printf '  Disk:    Docker is holding %s of build cache. Free it with:  bash install.sh --clean-only  (the next build downloads again)\n' "${cache%% *}" ;; esac
+  val=${cache%% *}; num=${val%%[A-Za-z]*}; unit=${val##*[0-9.]}
+  case "$unit" in # only worth mentioning from about half a gigabyte up
+    GB | TB) show=1 ;;
+    MB) show=$(awk -v n="${num:-0}" 'BEGIN{print (n >= 500) ? 1 : 0}') ;;
+    *) show=0 ;;
+  esac
+  if [ "${show:-0}" = 1 ]; then printf '  Disk:    Docker is holding %s of build cache. Free it with:  bash install.sh --clean-only  (the next build downloads again)\n' "$val"; fi
 fi
 printf '  Logs:    docker compose logs -f alarmplus        (and System & debug in the web UI)\n'
 printf '  Update:  git pull && bash install.sh\n'
