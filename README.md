@@ -10,7 +10,7 @@ ESP32-CAM ──video──▶ Raspberry Pi: Smilarm (schedule · smile detectio
 
 ## Quick start
 ```bash
-git clone <repository-url> smilarm && cd smilarm
+git clone https://github.com/akimerslys/smilarm && cd smilarm
 bash install.sh        # install (and update)
 bash uninstall.sh      # remove
 ```
@@ -80,6 +80,6 @@ PulseAudio/USB-camera/bridge-network setups, the native install on a fresh machi
 ```bash
 pip install -r requirements-dev.txt && python -m pytest tests
 ```
-About 230 tests: schedule, smile gate, the ring loop and its failure modes, REST API, settings and in-place `config.toml` editing, the MPD client, hooks, the flashlight against a fake
-ESP32, the image definition, entrypoint and health check, every script (against a stub `docker` or a throw-away home), and documentation consistency.
+About 200 tests: schedule, smile gate, the ring loop and its failure modes, REST API, settings and in-place `config.toml` editing, the MPD client, hooks, the flashlight against a fake
+ESP32, the image definition, entrypoint and health check, every install/uninstall path (against a stub `docker` or a throw-away home), and documentation consistency.
 Layout: `smilarm/` (Python package), `web/index.html`, `firmware/smilarm_cam/`, `Dockerfile` + `docker-compose*.yml` + `docker/`, `install.sh` / `uninstall.sh` + `scripts/`, `openclaw/`, `docs/`, `tests/`.

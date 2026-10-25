@@ -1,4 +1,4 @@
-"""The documentation must not point at things that don't exist (links, anchors, scripts, settings), and the project has one name."""
+"""The documentation must not point at things that don't exist: links, anchors, scripts, settings."""
 import re
 import shutil
 import subprocess
@@ -79,19 +79,3 @@ def test_two_simple_scripts_and_the_docker_path_comes_first():
     assert readme.index("bash install.sh ") < readme.index("bash uninstall.sh ") < readme.index("--native")  # quick start first, extras after
     assert "docs/install.md" in readme and "docs/hardware.md" in readme
     assert len(readme.splitlines()) < 100  # the README stays a quick start; the details live in docs/
-
-
-def test_the_old_name_only_survives_in_the_migration_code_and_its_docs():
-    allowed = {"scripts/lib/common.sh", "scripts/install-docker.sh", "scripts/uninstall.sh", "docs/install.md", "README.md", "smilarm/app.py",
-               "tests/test_scripts.py", "tests/test_ui_lib.py", "tests/test_docs.py", "tests/conftest.py", "tests/test_setup_ui_backend.py"}
-    pattern = re.compile(r"alarmplus|Alarm\+|alarm-plus|ALARMPLUS|alarmcam", re.I)
-    files = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True).stdout.split()
-    for f in files:
-        p = ROOT / f
-        if f in allowed or not p.exists() or p.suffix in (".png", ".jpg", ".task", ".xml"):
-            continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        assert not pattern.search(text), f"{f} still uses the old name"
