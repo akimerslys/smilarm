@@ -11,7 +11,7 @@ ESP32-CAM ──video──▶ Raspberry Pi: Smilarm (schedule · smile detectio
 ## Quick start
 ```bash
 git clone https://github.com/akimerslys/smilarm && cd smilarm
-bash install.sh        # install (and update)
+bash install.sh --clean-cache        # install (and update)
 bash uninstall.sh      # remove
 ```
 Then open **`http://<your-pi>:8080`**. The **Setup** card at the top walks you through it: **timezone → camera address → access token → test the sound**.
@@ -24,8 +24,6 @@ You need: a Raspberry Pi 4/5 (or any 64-bit Linux box), Docker (`bash install.sh
 | | |
 |---|---|
 | `bash install.sh --native` | no Docker: systemd service + Python venv in `~/.smilarm` |
-| `bash install.sh --demo` | preview the installer; installs nothing |
-| `bash install.sh --clean-cache` | free Docker's build cache afterwards (`--clean-only`: just that) |
 | `bash install.sh --build` / `--no-start` / `--plain` / `--no-migrate` | build from this clone / install only / no animation / skip moving data from the old "Alarm+" |
 | `bash uninstall.sh --purge` | also delete your config and alarms (a backup is written first) |
 | `smilarm update` · `backup` · `restore` · `clean` | update, save/restore your settings and alarms, free disk space |
@@ -80,6 +78,5 @@ PulseAudio/USB-camera/bridge-network setups, the native install on a fresh machi
 ```bash
 pip install -r requirements-dev.txt && python -m pytest tests
 ```
-About 200 tests: schedule, smile gate, the ring loop and its failure modes, REST API, settings and in-place `config.toml` editing, the MPD client, hooks, the flashlight against a fake
-ESP32, the image definition, entrypoint and health check, every install/uninstall path (against a stub `docker` or a throw-away home), and documentation consistency.
+Tests: schedule, smile gate, the ring loop and its failure modes, REST API, settings and in-place `config.toml` editing, the MPD client, hooks, the image definition, entrypoint and health check, every install/uninstall path (against a stub `docker` or a throw-away home), and documentation consistency.
 Layout: `smilarm/` (Python package), `web/index.html`, `firmware/smilarm_cam/`, `Dockerfile` + `docker-compose*.yml` + `docker/`, `install.sh` / `uninstall.sh` + `scripts/`, `openclaw/`, `docs/`, `tests/`.
