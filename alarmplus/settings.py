@@ -1,15 +1,18 @@
-"""Settings editable from the web UI: a validated allowlist layered over config.toml.
+"""Settings editable from the web UI: a validated allowlist, saved back into config.toml.
 
-Overrides live in data/settings.json; config.toml is never rewritten. Anything that can run
-commands or reach other hosts (`sensitive`) is only editable when `server.token` is set.
+The file is edited in place (comments and untouched lines stay) and the change is applied live.
+Anything that can run commands or reach other hosts (`sensitive`) is only editable when
+`server.token` is set.
 """
 import copy
 import json
 import logging
 import os
 import re
+import shutil
 from pathlib import Path
 
+from . import config as config_mod
 from .audio import SOUND_EXT
 
 log = logging.getLogger("settings")
@@ -45,6 +48,7 @@ SCHEMA = [
     _f("ring.max_minutes", "float", "Failsafe: stop ringing after this many minutes.", min=1, max=120, step=1),
     _f("ring.allow_manual_dismiss", "bool", "Allow dismissing without a smile (defeats the purpose)."),
     _f("ring.camera_fail_seconds", "int", "Camera silent this long = manual dismiss unlocked.", min=5, max=600),
+    _f("logging.level", "choice", "Log detail for journalctl and the web UI log: DEBUG adds per-second detection and camera numbers.", choices=["DEBUG", "INFO", "WARNING"]),
     _f("hooks.on_ring", "str", "Shell command run on this device when an alarm starts.", sensitive=True),
     _f("hooks.on_dismiss", "str", "Shell command run on this device when an alarm ends.", sensitive=True),
     _f("hooks.timeout_seconds", "int", "Kill a hook that runs longer than this.", min=1, max=600, sensitive=True),
@@ -114,21 +118,12 @@ def validate(key: str, v):
 
 
 class Settings:
-    def __init__(self, cfg, path: Path):
-        self.cfg, self.path = cfg, path
-        self.base = copy.deepcopy(cfg._d)
-        self.overrides: dict = {}
+    def __init__(self, cfg, path: Path, legacy_json: Path | None = None):
+        self.cfg, self.path = cfg, Path(path)
+        self.defaults = copy.deepcopy(config_mod.DEFAULTS)
         self.listeners = []
-        if path.exists():
-            try:
-                for k, v in json.loads(path.read_text(encoding="utf-8")).items():
-                    try:
-                        self._set(k, validate(k, v))
-                        self.overrides[k] = v
-                    except ValueError as e:
-                        log.warning("ignoring saved setting %s: %s", k, e)
-            except (OSError, ValueError) as e:
-                log.warning("cannot read %s: %s", path, e)
+        if legacy_json and legacy_json.exists():
+            self._migrate(legacy_json)
 
     # -- helpers --
     def _get(self, key, d=None):
@@ -144,29 +139,48 @@ class Settings:
         """Sensitive settings (commands, webhook) need an API token so the LAN can't set them."""
         return not self.cfg.server.token
 
-    def _save(self):
-        if self.overrides:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self.overrides, indent=1), encoding="utf-8")
-            os.replace(tmp, self.path)
-        elif self.path.exists():
-            self.path.unlink()
-
     def _notify(self):
         for fn in self.listeners:
             fn()
 
+    def _write(self, clean: dict):
+        """Edit config.toml in place (creating it from the defaults if missing); keep one .bak."""
+        from .cfgtools import render_defaults, set_values
+
+        text = self.path.read_text(encoding="utf-8") if self.path.exists() else render_defaults()
+        new = set_values(text, clean)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.path.exists():
+            shutil.copyfile(self.path, self.path.with_name(self.path.name + ".bak"))
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        tmp.write_text(new, encoding="utf-8", newline="\n")
+        os.replace(tmp, self.path)
+
+    def _migrate(self, legacy: Path):
+        """Older versions kept web edits in data/settings.json: fold them into config.toml once."""
+        try:
+            old = {k: validate(k, v) for k, v in json.loads(legacy.read_text(encoding="utf-8")).items() if k in BY_KEY}
+            if old:
+                self._write(old)
+                for k, v in old.items():
+                    self._set(k, v)
+            legacy.rename(legacy.with_name(legacy.name + ".migrated"))
+            log.info("moved %d saved setting(s) from %s into %s", len(old), legacy.name, self.path.name)
+        except (OSError, ValueError) as e:
+            log.warning("could not migrate %s: %s", legacy, e)
+
     # -- API --
     def describe(self):
         return [
-            {**s, "value": self._get(s["key"]), "default": self._get(s["key"], self.base),
-             "overridden": s["key"] in self.overrides, "locked": bool(s.get("sensitive")) and self.locked}
+            {**s, "value": self._get(s["key"]), "default": self._get(s["key"], self.defaults),
+             "overridden": self._get(s["key"]) != self._get(s["key"], self.defaults),
+             "locked": bool(s.get("sensitive")) and self.locked}
             for s in SCHEMA
         ]
 
     def update(self, updates: dict):
-        """Validate everything first, then apply. Raises ValueError({key: msg}) / PermissionError."""
+        """Validate everything, write config.toml, then apply live.
+        Raises ValueError({key: msg}), PermissionError, or OSError (file not writable)."""
         locked = [k for k in updates if BY_KEY.get(k, {}).get("sensitive") and self.locked]
         if locked:
             raise PermissionError("set server.token in config.toml to edit: " + ", ".join(locked))
@@ -181,18 +195,31 @@ class Settings:
             errors["audio.volume_max"] = "must be >= volume_start"
         if errors:
             raise ValueError(errors)
+        if not clean:
+            return
+        log.info("settings saved to %s: %s", self.path.name, ", ".join(f"{k}={v!r}" for k, v in clean.items() if not k.startswith("hooks.") and k != "events.webhook_url") or "(commands/webhook changed)")
+        self._write(clean)  # file first: if it can't be saved, nothing changes in memory either
         for k, v in clean.items():
             self._set(k, v)
-            if v == self._get(k, self.base):
-                self.overrides.pop(k, None)
-            else:
-                self.overrides[k] = v
-        self._save()
         self._notify()
 
-    def reset(self):
-        for k in list(self.overrides):
-            self._set(k, self._get(k, self.base))
-        self.overrides.clear()
-        self._save()
+    def reload(self) -> dict:
+        """Re-read config.toml (e.g. after editing it by hand). Returns {key: problem} for rejected values."""
+        loaded = config_mod.load(str(self.path))
+        problems = {}
+        for s in SCHEMA:
+            k = s["key"]
+            try:
+                self._set(k, validate(k, self._get(k, loaded._d)))
+            except ValueError as e:
+                problems[k] = str(e)
+        self._notify()
+        return problems
+
+    def restore_defaults(self):
+        """Write the built-in default of every editable setting (that isn't locked) into config.toml."""
+        vals = {s["key"]: self._get(s["key"], self.defaults) for s in SCHEMA if not (s.get("sensitive") and self.locked)}
+        self._write(vals)
+        for k, v in vals.items():
+            self._set(k, v)
         self._notify()

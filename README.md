@@ -31,17 +31,18 @@ Check `http://alarmcam.local:81/stream`. (The Arduino IDE works too: put `main.c
 **2. Rpi5:**
 ```bash
 git clone <repo> alarm+ && cd alarm+ && bash deploy/install.sh
-nano config.toml    # camera.source etc.
 ```
 If the camera is mounted sideways or upside down, set `camera.rotate` (0/90/180/270, clockwise; try 90, else 270) and check the result in **Smile test**. The detector only works on upright faces.
+
+`install.sh` installs the dependencies, generates `config.toml` with every default value (an existing one is never overwritten), opens it in `nano` (or `$EDITOR`) so you can set `camera.source` and the rest, checks it (re-opening the editor if something is invalid), and then restarts the service. The installer shows seven numbered steps with a spinner, what is downloading right now and how much (system packages and Python libraries with running totals, the face model with a progress bar, speed and ETA), and saves everything to `data/install.log`. Options: `--no-edit` skips the editor, `--plain` turns the animation off, `--demo` previews the whole UI with fake downloads and installs nothing. You can edit `config.toml` and run `sudo systemctl restart alarmplus` any time later; `python -m alarmplus --check-config config.toml` validates it.
 
 Prefer the camera's IP address in `camera.source` (e.g. `http://10.9.141.122:81/stream`): `.local` names often don't resolve on the Pi. Reserve that IP in your router.
 
 Web UI: `http://<rpi5>.local:8080` — alarms, “Test ring”, “Camera” (plain live view, handy for aiming) and “Smile test” (live view with a smiling / not-smiling frame plus a table of debug values: score, threshold, progress, fps, frame age, …). The same values are available as JSON at `/api/debug`.
 
 Two more panels in the UI:
-- **System & debug** — CPU, memory, temperature, power/throttling (under-voltage!), load, disk, uptimes, reachability of the camera and moOde, package versions, last alarm result, last hook runs, the live log, and a **Test sound** button.
-- **Settings** — the options that are safe to change at runtime (smile threshold/hold, camera preset, volume ramp, sound file/folder/device, moOde, failsafes), each validated against its allowed range. Changes are stored in `data/settings.json`; `config.toml` is never rewritten and **Reset** returns to it. Commands and the webhook are editable here only when `server.token` is set.
+- **System & debug** — CPU, memory, temperature, power/throttling (under-voltage!), load, disk, uptimes, reachability of the camera and moOde, package versions, last alarm result, last hook runs, the live log (filterable to warnings/errors; set its detail in Settings → `logging.level`, DEBUG adds per-second detection and camera numbers), and a **Test sound** button. If the camera can't be read, the log and the Smile test table say why (wrong IP, connection refused, no answer, ESP32 busy with another viewer, ...).
+- **Settings** — the options that are safe to change at runtime (smile threshold/hold, camera preset, volume ramp, sound file/folder/device, moOde, failsafes), each validated against its allowed range. **Save** edits `config.toml` in place (your comments and other lines stay; the previous version is kept as `config.toml.bak`) and applies the change live. **Reload file** re-reads `config.toml` after you edited it by hand; **Restore defaults** writes the built-in defaults back into it. Commands and the webhook are editable here only when `server.token` is set.
 
 **3. Rpi3 + moOde (optional):** in `config.toml` set `audio.backend = "moode"` (or `"both"`) and `moode.host = "<rpi3>"`. moOde's MPD listens on port 6600 by default. The Rpi3 fetches the sound over HTTP from the Rpi5 (`/sound/alarm.wav`) — or set your own `moode.url` (e.g. an internet radio stream).
 

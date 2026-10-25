@@ -44,6 +44,7 @@ DEFAULTS = {
         "allow_manual_dismiss": False,
         "camera_fail_seconds": 45,  # no frames this long -> manual dismiss unlocked
     },
+    "logging": {"level": "INFO"},  # DEBUG | INFO | WARNING
     "events": {"webhook_url": ""},  # e.g. OpenClaw hook; receives JSON events
     # Shell commands run ON THIS DEVICE (the one running alarmplus). Env: ALARM_EVENT, ALARM_ID,
     # ALARM_LABEL, ALARM_TIME, ALARM_REASON (smile|manual|timeout), ALARM_SECONDS.

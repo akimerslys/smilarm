@@ -43,12 +43,16 @@ def annotate(img, score, thr, progress):
     return img
 
 
-def build(cfg) -> web.Application:
+def build(cfg, config_path: str | None = None) -> web.Application:
     data = Path(cfg.data_dir)
-    settings = Settings(cfg, data / "settings.json")
+    settings = Settings(cfg, Path(config_path) if config_path else data / "config.toml", data / "settings.json")
     logbuf, sampler, net = LogBuffer(), Sampler(cfg.data_dir), {"at": 0.0, "v": {}}
     logging.getLogger().addHandler(logbuf)
-    logging.getLogger().setLevel(logging.INFO)
+    apply_level = lambda: logging.getLogger().setLevel(getattr(logging, cfg.logging.level, logging.INFO))  # noqa: E731
+    apply_level()
+    settings.listeners.append(apply_level)
+    log = logging.getLogger("app")
+    logging.getLogger("aiohttp.access").setLevel(logging.WARNING)  # per-request lines are replaced by the access_log middleware
     store = Store(data / "alarms.json")
     builtin = data / "alarm.wav"
     audio = Audio(cfg, builtin)
@@ -62,15 +66,33 @@ def build(cfg) -> web.Application:
         tok = cfg.server.token
         if tok and request.path.startswith("/api/"):
             given = request.headers.get("Authorization", "").removeprefix("Bearer ") or request.query.get("token", "")
-            if not hmac.compare_digest(given, tok):
+            if not hmac.compare_digest(given.encode(), tok.encode()):  # bytes: str compare raises on non-ASCII
                 raise web.HTTPUnauthorized(text="token required")
         return await handler(request)
 
+    @web.middleware
+    async def access_log(request, handler):
+        """Log what matters instead of every UI poll: changes (non-GET) and failures."""
+        try:
+            resp = await handler(request)
+        except web.HTTPException as e:
+            if e.status >= 400 and e.status != 401:
+                log.warning("%s %s -> %s %s", request.method, request.path, e.status, (e.text or "")[:120])
+            raise
+        if request.method != "GET":
+            log.info("%s %s -> %s (from %s)", request.method, request.path, resp.status, request.remote)
+        else:
+            log.debug("GET %s -> %s", request.path_qs, resp.status)
+        return resp
+
     async def body(req):
         try:
-            return await req.json()
+            data = await req.json()
         except Exception:
             raise web.HTTPBadRequest(text="invalid JSON")
+        if not isinstance(data, dict):
+            raise web.HTTPBadRequest(text="expected a JSON object")
+        return data
 
     def guard(fn, *a):
         try:
@@ -107,11 +129,22 @@ def build(cfg) -> web.Application:
             raise web.HTTPForbidden(text=str(e))
         except ValueError as e:
             raise web.HTTPBadRequest(text=json.dumps(e.args[0]) if isinstance(e.args[0], dict) else str(e))
-        return web.json_response({"settings": settings.describe(), "locked": settings.locked})
+        except OSError as e:
+            raise web.HTTPInternalServerError(text=f"could not write {settings.path}: {e}")
+        return web.json_response({"settings": settings.describe(), "locked": settings.locked, "file": str(settings.path)})
+
+    @r.post("/api/settings/reload")
+    async def reload_settings(_):
+        """Re-read config.toml after it was edited by hand."""
+        problems = settings.reload()
+        return web.json_response({"settings": settings.describe(), "locked": settings.locked, "problems": problems})
 
     @r.delete("/api/settings")
-    async def reset_settings(_):
-        settings.reset()
+    async def restore_defaults(_):
+        try:
+            settings.restore_defaults()
+        except OSError as e:
+            raise web.HTTPInternalServerError(text=f"could not write {settings.path}: {e}")
         return web.json_response({"settings": settings.describe(), "locked": settings.locked})
 
     @r.get("/api/logs")
@@ -147,13 +180,18 @@ def build(cfg) -> web.Application:
         if engine.ringing or probe["sound"]:
             raise web.HTTPConflict(text="alarm ringing or sound test already running")
         probe["sound"] = True
+        log.info("sound test: backend=%s", cfg.audio.backend)
 
         async def play():
             try:
+                if engine.ringing:  # an alarm started in the meantime owns the speakers
+                    return
                 await audio.start()
+                log.info("sound test playing: %s via %s", audio.current, [type(p).__name__ for p in audio.players] or "NO BACKEND STARTED")
                 await asyncio.sleep(6)
             finally:
-                await audio.stop()
+                if not engine.ringing:
+                    await audio.stop()
                 probe["sound"] = False
 
         asyncio.create_task(play())
@@ -193,14 +231,20 @@ def build(cfg) -> web.Application:
             raise web.HTTPConflict(text="alarm ringing or smile test already running")
         probe["active"] = True
         probe["stats"] = {"updated": time.monotonic()}
+        log.info("smile test started (threshold %s, hold %ss)", cfg.smile.threshold, cfg.smile.hold_seconds)
         try:
             if engine.detector is None:
-                await engine.preload()
+                try:
+                    await engine.preload()
+                except Exception as e:
+                    log.exception("smile detector could not be loaded")
+                    raise web.HTTPServiceUnavailable(text=f"smile detector could not be loaded: {e}")
             resp = web.StreamResponse(headers={"Content-Type": "multipart/x-mixed-replace; boundary=f", "Cache-Control": "no-cache"})
             await resp.prepare(req)
             sm = cfg.smile
             gate, loop = SmileGate(sm.threshold, sm.hold_seconds), asyncio.get_running_loop()
             verdict = {"score": None, "progress": 0.0}
+            dbg = [0.0]
 
             async def detect():
                 last, fps = 0.0, 0.0
@@ -216,6 +260,9 @@ def build(cfg) -> web.Application:
                     prev = probe["stats"].get("updated", now - 1)
                     fps = 0.7 * fps + 0.3 / max(now - prev, 1e-3)
                     verdict.update(score=score, progress=gate.progress)
+                    if log.isEnabledFor(logging.DEBUG) and now - dbg[0] > 1:
+                        dbg[0] = now
+                        log.debug("smile test: score=%s progress=%.2f infer=%.0f ms camera=%s", score, gate.progress, (now - t0) * 1000, cam.stats())
                     probe["stats"] = {
                         "updated": now, "face": score is not None,
                         "score": None if score is None else round(score, 3),
@@ -248,6 +295,7 @@ def build(cfg) -> web.Application:
             return resp
         finally:
             probe["active"] = False
+            log.info("smile test ended")
 
     @r.post("/api/alarms")
     async def add(req):
@@ -322,8 +370,16 @@ def build(cfg) -> web.Application:
             cam.release()
         return resp
 
+    async def preload_quietly():
+        try:
+            await engine.preload()
+        except Exception:
+            log.exception("smile detector could not be loaded (alarms will ring until stopped manually)")
+
     async def on_start(app):
-        app[TASKS] = [asyncio.create_task(engine.preload()), asyncio.create_task(engine.run())]
+        log.info("Alarm+ started: web :%s | camera %s (%s, rotate %s) | audio %s | config %s",
+                 cfg.server.port, cam.source, cam.quality, cam.rotate, cfg.audio.backend, settings.path)
+        app[TASKS] = [asyncio.create_task(preload_quietly()), asyncio.create_task(engine.run())]
 
     async def on_stop(app):
         for t in app[TASKS]:
@@ -332,7 +388,7 @@ def build(cfg) -> web.Application:
         await engine.close()
         logging.getLogger().removeHandler(logbuf)
 
-    app = web.Application(middlewares=[auth])
+    app = web.Application(middlewares=[access_log, auth])
     app[ENGINE], app[CAM], app[AUDIO], app[SETTINGS] = engine, cam, audio, settings
     app.add_routes(r)
     app.on_startup.append(on_start)

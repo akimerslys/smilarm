@@ -156,6 +156,7 @@ def test_webhook_events(tmp_path):
         async with TestServer(app) as srv:
             eng = make(tmp_path, events={"webhook_url": str(srv.make_url("/h"))})
             await eng.ring(ALARM)
+            await eng.wait_background()
             await eng.close()
 
     asyncio.run(main())
@@ -168,6 +169,7 @@ def test_broken_webhook_does_not_break_ring(tmp_path):
 
     async def main():
         await asyncio.wait_for(eng.ring(ALARM), 10)
+        await eng.wait_background()
         await eng.close()
 
     asyncio.run(main())

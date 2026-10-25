@@ -3,8 +3,10 @@ import asyncio
 import json
 import logging
 import math
+import os
 import random
 import shutil
+import signal
 import socket
 import struct
 import wave
@@ -28,27 +30,39 @@ def make_builtin_tone(path: Path):
             frames += struct.pack("<h", int(26000 * env * math.sin(2 * math.pi * 1760 * i / sr)))
         frames += b"\x00\x00" * n_off
     frames += b"\x00\x00" * int(sr * 0.6)
-    with wave.open(str(path), "wb") as w:
+    tmp = path.with_name(path.name + ".tmp")  # write-then-rename: a crash can't leave a half-written tone behind
+    with wave.open(str(tmp), "wb") as w:
         w.setnchannels(1), w.setsampwidth(2), w.setframerate(sr)
         w.writeframes(bytes(frames))
+    os.replace(tmp, path)
 
 
 class LocalPlayer:
     def __init__(self, sound: str, device: str = ""):
         self.sound, self.device, self.proc = sound, device, None
 
-    async def start(self, volume: int):
+    def _command(self, volume: int) -> list[str]:
         if mpv := shutil.which("mpv"):
-            cmd = [mpv, "--no-video", "--really-quiet", "--loop=inf", f"--volume={volume}",
-                   f"--input-ipc-server={MPV_SOCK}", *([f"--audio-device={self.device}"] if self.device else []), self.sound]
-        elif ff := shutil.which("ffplay"):
-            cmd = [ff, "-nodisp", "-loglevel", "quiet", "-loop", "0", self.sound]
-        elif ap := shutil.which("aplay"):
+            return [mpv, "--no-video", "--really-quiet", "--loop=inf", f"--volume={volume}",
+                    f"--input-ipc-server={MPV_SOCK}", *([f"--audio-device={self.device}"] if self.device else []), self.sound]
+        if ff := shutil.which("ffplay"):
+            return [ff, "-nodisp", "-loglevel", "quiet", "-loop", "0", self.sound]
+        if ap := shutil.which("aplay"):
             dev = f'-D "{self.device}"' if self.device else ""
-            cmd = ["sh", "-c", f'while :; do {ap} -q {dev} "{self.sound}"; done']
-        else:
-            raise RuntimeError("no audio player found (install mpv)")
-        self.proc = await asyncio.create_subprocess_exec(*cmd)
+            return ["sh", "-c", f'while :; do {ap} -q {dev} "{self.sound}"; done']
+        raise RuntimeError("no audio player found (install mpv)")
+
+    async def start(self, volume: int):
+        self.proc = await asyncio.create_subprocess_exec(
+            *self._command(volume), stderr=asyncio.subprocess.PIPE, start_new_session=(os.name == "posix"))
+        try:  # a player that dies at once (missing file, wrong device) would otherwise mean a silent alarm
+            await asyncio.wait_for(self.proc.wait(), 0.6)
+        except asyncio.TimeoutError:
+            return  # still running: good
+        err = (await self.proc.stderr.read()).decode(errors="replace").strip()[-300:]
+        code = self.proc.returncode
+        self.proc = None
+        raise RuntimeError(f"player exited at once (code {code}) for '{self.sound}'" + (f": {err}" if err else " (bad file or audio device?)"))
 
     async def set_volume(self, v: int):
         try:
@@ -56,16 +70,25 @@ class LocalPlayer:
             w.write(json.dumps({"command": ["set_property", "volume", v]}).encode() + b"\n")
             await w.drain()
             w.close()
-        except OSError:
-            pass  # non-mpv player: fixed system volume
+        except (OSError, AttributeError):
+            pass  # non-mpv player: fixed system volume (open_unix_connection is missing on Windows)
+
+    def _signal(self, sig):
+        if os.name == "posix":
+            try:
+                os.killpg(os.getpgid(self.proc.pid), sig)  # the whole group: the `sh` loop AND its aplay child
+                return
+            except (ProcessLookupError, PermissionError):
+                return
+        self.proc.terminate() if sig == signal.SIGTERM else self.proc.kill()
 
     async def stop(self):
         if self.proc and self.proc.returncode is None:
-            self.proc.terminate()
+            self._signal(signal.SIGTERM)
             try:
                 await asyncio.wait_for(self.proc.wait(), 2)
             except asyncio.TimeoutError:
-                self.proc.kill()
+                self._signal(getattr(signal, "SIGKILL", signal.SIGTERM))
         self.proc = None
 
 
@@ -150,14 +173,22 @@ class Audio:
         self.current: str = str(builtin)  # what the last start() picked (served to moOde as /sound/current)
 
     def _pick_sound(self) -> str:
-        """sound_dir (random file) > sound (file/URL) > built-in tone."""
+        """sound_dir (random file) > sound (file/URL) > built-in tone. A bad path never means silence."""
         a = self.cfg.audio
         if a.sound_dir:
-            files = [p for p in Path(a.sound_dir).expanduser().iterdir() if p.is_file() and p.suffix.lower() in SOUND_EXT]
+            try:
+                files = [p for p in Path(a.sound_dir).expanduser().iterdir() if p.is_file() and p.suffix.lower() in SOUND_EXT]
+            except OSError as e:
+                files = []
+                log.warning("cannot read sound_dir %s: %s", a.sound_dir, e)
             if files:
                 return str(random.choice(files))
-            log.warning("sound_dir %s has no usable sound files", a.sound_dir)
-        return a.sound or str(self.builtin)
+            log.warning("sound_dir %s has no usable sound files; falling back", a.sound_dir)
+        if a.sound:
+            if a.sound.startswith(("http://", "https://")) or Path(a.sound).expanduser().is_file():
+                return str(Path(a.sound).expanduser()) if not a.sound.startswith("http") else a.sound
+            log.warning("audio.sound %s does not exist; using the built-in tone", a.sound)
+        return str(self.builtin)
 
     async def _try(self, p, vol) -> bool:
         try:
@@ -169,6 +200,16 @@ class Audio:
             await p.stop()
             return False
 
+    async def _start_local(self, vol: int) -> bool:
+        """Play the chosen sound; if that fails, the built-in tone; if that fails, the default device."""
+        a, tone = self.cfg.audio, str(self.builtin)
+        for sound, device in dict.fromkeys([(self.current, a.device), (tone, a.device), (tone, "")]):
+            if await self._try(LocalPlayer(sound, device), vol):
+                if (sound, device) != (self.current, a.device):
+                    log.warning("alarm is playing '%s' on device '%s' instead of the configured sound/device", sound, device or "default")
+                return True
+        return False
+
     async def start(self):
         a, m = self.cfg.audio, self.cfg.moode
         v0 = a.volume_start
@@ -177,14 +218,21 @@ class Audio:
         ok_moode = False
         if want_moode:
             try:
-                url = "" if m.library_dir else m.url or (self.current if self.current.startswith("http") else
-                                f"http://{_own_ip_towards(m.host)}:{self.cfg.server.port}/sound/current")
+                if m.library_dir:
+                    url = ""
+                elif m.url:
+                    url = m.url
+                elif self.current.startswith("http"):
+                    url = self.current
+                else:  # resolving the moOde host can block for seconds: keep it off the event loop
+                    ip = await asyncio.get_running_loop().run_in_executor(None, _own_ip_towards, m.host)
+                    url = f"http://{ip}:{self.cfg.server.port}/sound/current"
             except OSError as e:
                 log.warning("cannot resolve moOde host: %s", e)
             else:
                 ok_moode = await self._try(MoodePlayer(m.host, m.port, url, m.library_dir), v0)
         if a.backend in ("local", "both") or (want_moode and not ok_moode and m.fallback_local):
-            await self._try(LocalPlayer(self.current, a.device), v0)
+            await self._start_local(v0)
         if not self.players:
             log.error("no audio backend started")
         self._ramp = asyncio.create_task(self._ramp_volume())
@@ -201,6 +249,10 @@ class Audio:
     async def stop(self):
         if self._ramp:
             self._ramp.cancel()
-        for p in self.players:
-            await p.stop()
-        self.players = []
+            self._ramp = None
+        players, self.players = self.players, []
+        for p in players:  # one stubborn player must not keep the others playing
+            try:
+                await p.stop()
+            except Exception as e:
+                log.warning("could not stop %s: %s", type(p).__name__, e)

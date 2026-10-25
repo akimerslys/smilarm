@@ -17,7 +17,7 @@ from test_engine import ALARM, FakeAudio, FakeCam, FakeDet
 def mk(tmp_path, token=""):
     cfg = config.load(None)
     cfg._d["server"]["token"] = token
-    return cfg, st.Settings(cfg, tmp_path / "settings.json")
+    return cfg, st.Settings(cfg, tmp_path / "config.toml")
 
 
 def test_validation_ranges_and_types(tmp_path):
@@ -37,25 +37,6 @@ def test_update_is_atomic_and_cross_checked(tmp_path):
     with pytest.raises(ValueError):
         s.update({"smile.fps": 5, "audio.volume_start": 90, "audio.volume_max": 50})
     assert cfg.smile.fps == 6 and cfg.audio.volume_start == 15
-
-
-def test_persistence_and_reset(tmp_path):
-    cfg, s = mk(tmp_path)
-    s.update({"smile.threshold": 0.65})
-    assert json.loads((tmp_path / "settings.json").read_text()) == {"smile.threshold": 0.65}
-    cfg2, s2 = mk(tmp_path)  # "restart"
-    assert cfg2.smile.threshold == 0.65 and any(d["key"] == "smile.threshold" and d["overridden"] for d in s2.describe())
-    s2.update({"smile.threshold": 0.5})  # back to the default: override dropped
-    assert not (tmp_path / "settings.json").exists()
-    s2.update({"smile.threshold": 0.9})
-    s2.reset()
-    assert cfg2.smile.threshold == 0.5 and not (tmp_path / "settings.json").exists()
-
-
-def test_bad_saved_value_is_ignored(tmp_path):
-    (tmp_path / "settings.json").write_text(json.dumps({"smile.threshold": 99, "smile.fps": 9}))
-    cfg, _ = mk(tmp_path)
-    assert cfg.smile.threshold == 0.5 and cfg.smile.fps == 9
 
 
 def test_sensitive_settings_need_token(tmp_path):
@@ -132,7 +113,7 @@ def test_on_dismiss_hook_gets_env(tmp_path):
 
     async def main():
         await eng.ring({"id": "a1", "time": "07:00", "label": "gym"})
-        await asyncio.gather(*eng._hooks)
+        await eng.wait_background()
 
     asyncio.run(main())
     assert out.read_text() == "dismiss|a1|gym|smile"
@@ -145,7 +126,7 @@ def test_on_ring_hook_runs_and_failures_are_contained(tmp_path):
 
     async def main():
         await eng.ring(ALARM)
-        await asyncio.gather(*eng._hooks)
+        await eng.wait_background()
 
     asyncio.run(main())
     rec = eng.hook_log[-1]
@@ -158,7 +139,7 @@ def test_hook_timeout_kills_command(tmp_path):
 
     async def main():
         await eng.ring(ALARM)
-        await asyncio.wait_for(asyncio.gather(*eng._hooks), 10)
+        await asyncio.wait_for(eng.wait_background(), 10)
 
     asyncio.run(main())
     assert eng.hook_log[-1]["code"] is None and "killed" in eng.hook_log[-1]["output"]
@@ -167,7 +148,7 @@ def test_hook_timeout_kills_command(tmp_path):
 def test_no_hook_configured_is_noop(tmp_path):
     eng = hook_engine(tmp_path)
     asyncio.run(eng.ring(ALARM))
-    assert eng.hook_log == [] and not eng._hooks
+    assert eng.hook_log == []
 
 
 # ---------- sysinfo ----------
@@ -206,7 +187,7 @@ def api(fn, tmp_path, token="", patch=None):
     cfg = config.load(None)
     cfg._d["data_dir"] = str(tmp_path)
     cfg._d["server"]["token"] = token
-    app = build(cfg)
+    app = build(cfg, str(tmp_path / "config.toml"))
     if patch:
         patch(app)
 
@@ -231,6 +212,7 @@ def test_settings_endpoints(tmp_path):
         r = await cl.delete("/api/settings")
         vals = {s["key"]: s["value"] for s in (await r.json())["settings"]}
         assert vals["smile.threshold"] == 0.5 and vals["camera.quality"] == "low"
+        assert "threshold = 0.5" in (tmp_path / "config.toml").read_text()
 
     api(go, tmp_path)
 
@@ -339,5 +321,29 @@ def test_dismiss_endpoint_message_when_disabled(tmp_path):
     async def go(cl, app):
         r = await cl.post("/api/dismiss")
         assert r.status == 403 and "allow_manual_dismiss" in await r.text()
+
+    api(go, tmp_path)
+
+
+def test_web_save_writes_config_file_and_reload_endpoint(tmp_path):
+    async def go(cl, app):
+        assert (await cl.put("/api/settings", json={"smile.threshold": 0.72})).status == 200
+        f = tmp_path / "config.toml"
+        assert "threshold = 0.72" in f.read_text()
+        f.write_text(f.read_text().replace("0.72", "0.61"))  # hand edit on the device
+        r = await (await cl.post("/api/settings/reload")).json()
+        assert r["problems"] == {} and app[ENGINE].cfg.smile.threshold == 0.61
+
+    api(go, tmp_path)
+
+
+def test_web_save_writes_config_file_and_reload_endpoint(tmp_path):
+    async def go(cl, app):
+        assert (await cl.put("/api/settings", json={"smile.threshold": 0.72})).status == 200
+        f = tmp_path / "config.toml"
+        assert "threshold = 0.72" in f.read_text()
+        f.write_text(f.read_text().replace("0.72", "0.61"))  # hand edit on the device
+        r = await (await cl.post("/api/settings/reload")).json()
+        assert r["problems"] == {} and app[ENGINE].cfg.smile.threshold == 0.61
 
     api(go, tmp_path)

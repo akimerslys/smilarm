@@ -49,14 +49,14 @@ pre{max-height:220px;overflow:auto;font:12px ui-monospace,monospace;background:v
  <div class="meter" style="margin-top:6px"><i id="cpub"></i></div><div class="meter" style="margin-top:4px"><i id="memb"></i></div>
  <table id="sys"></table>
  <h3>Last hook runs</h3><pre id="hooks">–</pre>
- <h3>Log</h3><pre id="log">–</pre>
+ <h3>Log <select id="loglvl" style="font:inherit;font-size:12px"><option value="">everything</option><option value="warn">warnings &amp; errors only</option></select></h3><pre id="log">–</pre>
  <div class="row"><button class="g" id="sndtest">Test sound (6 s)</button><span class="mut">plays the current alarm sound without the camera</span></div>
 </details>
 
 <details class="card" id="setd"><summary>Settings</summary>
  <div class="mut" id="lockmsg" style="margin-top:6px"></div>
  <div id="setform"></div>
- <div class="row" style="margin-top:10px"><button id="setsave">Save</button><button class="g" id="setreset">Reset to config.toml</button></div>
+ <div class="row" style="margin-top:10px"><button id="setsave">Save to config.toml</button><button class="g" id="setreload">Reload file</button><button class="g" id="setreset">Restore defaults</button></div>
  <div class="mut" id="setmsg"></div>
 </details>
 
@@ -72,7 +72,7 @@ function render(s){
  $('next').textContent=s.next?'→ '+s.next.at.replace('T',' '):'';
  const ring=s.state=='ringing';$('ring').style.display=ring?'block':'none';
  if(ring){$('score').textContent='smile: '+(s.score??'no face found');$('rbar').style.width=(s.progress*100)+'%';const d=$('dis');d.textContent=s.can_stop?'Stop alarm':'Stop alarm (disabled in Settings)';d.className=s.can_stop?'':'g'}
- if(s.alarms)$('list').innerHTML=s.alarms.map(a=>`<div class="card row"><div><div class="t">${a.time}</div><div class="mut">${a.label||''} ${a.days.length?a.days.map(d=>DN[d]).join(' '):'every day'}${a.once?' · once':''}</div></div>
+ if(s.alarms)$('list').innerHTML=s.alarms.map(a=>`<div class="card row"><div><div class="t">${a.time}</div><div class="mut">${esc(a.label||'')} ${a.days.length?a.days.map(d=>DN[d]).join(' '):'every day'}${a.once?' · once':''}</div></div>
   <div><input type=checkbox ${a.enabled?'checked':''} onchange="api('PUT','/api/alarms/${a.id}',{enabled:this.checked}).then(load)"> <button class=g onclick="api('DELETE','/api/alarms/${a.id}').then(load)">✕</button></div></div>`).join('')}
 async function load(){const s=await api('GET','/api/state');s&&render(s)}
 $('add').onclick=async()=>{await api('POST','/api/alarms',{time:$('time').value,label:$('label').value,once:$('once').checked,days:[...$('days').querySelectorAll('input:checked')].map(i=>+i.value)});load()};
@@ -94,11 +94,12 @@ $('cam').onclick=()=>setMode('cam');$('st').onclick=()=>setMode('st');
 
 const ROWS=[['smile score','score'],['threshold','threshold'],['hold progress','progress'],['would dismiss','would_dismiss'],['face found','face'],
  ['detector','backend'],['inference ms','infer_ms'],['detect fps','detect_fps'],['detect frame age ms','detect_frame_age_ms'],['frame size','frame_size'],
- ['camera fps','cam_fps'],['camera frame age ms','cam_frame_age_ms'],['camera reconnects','cam_reconnects'],['camera frames','cam_frames'],
+ ['camera state','cam_state'],['camera error','cam_error'],['camera fps','cam_fps'],['camera frame age ms','cam_frame_age_ms'],['camera reconnects','cam_reconnects'],['camera frames','cam_frames'],
  ['quality preset','quality'],['rotate (deg)','rotate'],['detect width','detect_width'],['hold seconds','hold_seconds'],['camera','camera_source'],['alarm ringing','ringing']];
 async function pollDebug(){
  const r=await fetch(q('/api/debug'));if(!r.ok)return;const d=await r.json(),v=$('verdict');
- if(d.no_frames){v.className='none';v.textContent='⏳ waiting for camera…'}
+ if(d.cam_state=='error'){v.className='no';v.textContent='📷 camera error: '+d.cam_error}
+ else if(d.no_frames){v.className='none';v.textContent='⏳ waiting for camera…'}
  else if(d.detector_stalled){v.className='none';v.textContent='⏳ detector not answering'}
  else if(!d.face){v.className='none';v.textContent='❓ no face'}
  else if(d.smiling){v.className='smile';v.textContent='😁 SMILING'}
@@ -124,8 +125,9 @@ async function pollSys(){
   ...Object.entries(d.versions).map(([k,v])=>['pkg '+k,v])];
  $('sys').innerHTML=rows.map(([n,v])=>`<tr><td>${n}</td><td>${esc(v??'–')}</td></tr>`).join('');
  $('hooks').textContent=d.hooks.length?d.hooks.map(h=>h.at+' '+h.hook+' exit='+h.code+' '+h.cmd+(h.output?' → '+h.output.trim():'')).join(String.fromCharCode(10)):'no hook has run yet';
- const l=await (await fetch(q('/api/logs?n=40'))).json();const pre=$('log'),bottom=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-8;
- pre.textContent=l.lines.join(String.fromCharCode(10))||'–';if(bottom)pre.scrollTop=pre.scrollHeight}
+ const l=await (await fetch(q('/api/logs?n=150'))).json();const pre=$('log'),bottom=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-8;
+ const lines=$('loglvl').value=='warn'?l.lines.filter(x=>/ (WARNING|ERROR|CRITICAL) /.test(x)):l.lines;
+ pre.textContent=lines.join(String.fromCharCode(10))||'(no log lines yet)';if(bottom)pre.scrollTop=pre.scrollHeight}
 $('sysd').ontoggle=()=>{clearInterval(sysTimer);if($('sysd').open){pollSys();sysTimer=setInterval(pollSys,2000)}};
 $('sndtest').onclick=()=>api('POST','/api/sound-test');
 
@@ -150,9 +152,10 @@ $('setsave').onclick=async()=>{
   const v=s.type=='bool'?e.checked:s.type=='int'||s.type=='float'||(s.type=='choice'&&typeof s.choices[0]=='number')?(e.value===''?NaN:+e.value):e.value;if(v!==s.value)upd[s.key]=v});
  if(!Object.keys(upd).length){$('setmsg').textContent='Nothing changed.';return}
  const r=await fetch(q('/api/settings'),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(upd)});
- if(r.ok){$('setmsg').textContent='Saved. Camera/audio changes apply to the next alarm.';loadSettings()}
+ if(r.ok){$('setmsg').textContent='Saved to config.toml and applied. Camera/audio changes take effect on the next alarm or test.';loadSettings()}
  else{let t=await r.text();try{t=Object.entries(JSON.parse(t)).map(([k,m])=>k+': '+m).join('; ')}catch(e){}$('setmsg').textContent='Not saved — '+t}};
-$('setreset').onclick=async()=>{if(confirm('Discard all changes made here and go back to config.toml values?')){await api('DELETE','/api/settings');$('setmsg').textContent='Reset.';loadSettings()}};
+$('setreset').onclick=async()=>{if(confirm('Write the built-in default of every setting shown here into config.toml? (A copy is kept as config.toml.bak.)')){if(await api('DELETE','/api/settings')){$('setmsg').textContent='Defaults written to config.toml.';loadSettings()}}};
+$('setreload').onclick=async()=>{const r=await api('POST','/api/settings/reload');if(!r)return;const p=Object.entries(r.problems||{});$('setmsg').textContent=p.length?'Reloaded; ignored invalid values: '+p.map(([k,m])=>k+': '+m).join('; '):'Reloaded config.toml.';loadSettings()};
 
 load().then(()=>{const es=new EventSource(q('/api/events'));
  es.onmessage=e=>{const s=JSON.parse(e.data);render(s);if(s.state=='idle'&&s.next!==undefined)load()}});

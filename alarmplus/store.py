@@ -18,7 +18,7 @@ def clean(raw: dict, old: dict | None = None) -> dict:
     a["time"] = t
     if "days" in raw:
         days = raw["days"]
-        if not isinstance(days, list) or any(not isinstance(d, int) or not 0 <= d <= 6 for d in days):
+        if not isinstance(days, list) or any(isinstance(d, bool) or not isinstance(d, int) or not 0 <= d <= 6 for d in days):
             raise ValueError("days: list of 0..6 (Mon=0); empty = every day")
         a["days"] = sorted(set(days))
     for k in ("enabled", "once"):
