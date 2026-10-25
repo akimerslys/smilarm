@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from alarmplus import audio, clock, config, settings as st
-from alarmplus.app import ENGINE, RESTART, build
+from smilarm import audio, clock, config, settings as st
+from smilarm.app import ENGINE, RESTART, build
 
 
 def app_for(tmp_path, token="", **over):
@@ -174,7 +174,7 @@ def test_moode_url_uses_public_url_when_set(tmp_path):
 
 # ---------------- first-run checklist ----------------
 def test_setup_checklist_points_at_what_is_missing(tmp_path, monkeypatch):
-    monkeypatch.setenv("ALARMPLUS_DOCKER", "1")
+    monkeypatch.setenv("SMILARM_DOCKER", "1")
     cfg, app = app_for(tmp_path)
 
     async def go(cl):

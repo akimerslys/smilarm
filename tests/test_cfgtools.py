@@ -2,7 +2,7 @@ import subprocess
 import sys
 import tomllib
 
-from alarmplus import cfgtools, config
+from smilarm import cfgtools, config
 
 
 def test_generated_config_contains_every_default_and_round_trips():
@@ -29,7 +29,7 @@ def test_check_reports_problems(tmp_path):
 
 
 def run(*args):
-    return subprocess.run([sys.executable, "-m", "alarmplus", *args], capture_output=True, text=True, timeout=60)
+    return subprocess.run([sys.executable, "-m", "smilarm", *args], capture_output=True, text=True, timeout=60)
 
 
 def test_cli_write_and_check_config(tmp_path):
@@ -47,7 +47,7 @@ def test_config_example_lists_every_parameter_and_is_up_to_date():
     from pathlib import Path
 
     example = (Path(__file__).resolve().parent.parent / "config.example.toml").read_text(encoding="utf-8")
-    # regenerate with:  python -m alarmplus --write-config config.example.toml --force
+    # regenerate with:  python -m smilarm --write-config config.example.toml --force
     assert example == cfgtools.render_defaults(), "config.example.toml is stale"
     parsed = tomllib.loads(example)
     for key, value in config.DEFAULTS.items():

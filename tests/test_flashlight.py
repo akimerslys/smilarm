@@ -6,9 +6,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from alarmplus import camera as cam_mod
-from alarmplus import config, settings as st
-from alarmplus.camera import Camera, flash_url
+from smilarm import camera as cam_mod
+from smilarm import config, settings as st
+from smilarm.camera import Camera, flash_url
 
 
 class FakeEsp:
@@ -171,7 +171,7 @@ def test_settings_and_defaults():
 def test_web_settings_toggle_reaches_the_camera(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
 
-    from alarmplus.app import CAM, build
+    from smilarm.app import CAM, build
 
     cfg = config.load(None)
     cfg._d["data_dir"] = str(tmp_path)

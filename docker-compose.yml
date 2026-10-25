@@ -1,30 +1,27 @@
-# Alarm+ — the deployment description. Start it with:  bash install.sh   (or: docker compose up -d --build)
-# Then open http://<this-device>:8080 and finish the setup in Settings. Nothing in this file needs editing.
-#
-# Optional pieces live in extra files that install.sh adds through a generated `.env` (COMPOSE_FILE=...):
+# Smilarm: the deployment description. `bash install.sh` copies it to ~/.smilarm/compose/ and starts it; you never need to edit it.
+# Optional pieces are separate files that the installer lists in ~/.smilarm/compose/.env (COMPOSE_FILE=...):
 #   docker-compose.sound.yml  this device's speakers (/dev/snd); added automatically when the device has sound hardware
-#   docker-compose.local.yml  YOUR additions (USB camera, PulseAudio socket, bridge networking); never touched by updates; see docs/docker.md
-# If you run `docker compose` by hand without install.sh, add the sound file yourself:  -f docker-compose.yml -f docker-compose.sound.yml
-name: alarmplus
+#   docker-compose.local.yml  YOUR additions (USB camera, PulseAudio socket, bridge networking); create it next to this file, updates keep it
+name: smilarm
 
 services:
-  alarmplus:
-    build: .
-    image: alarmplus:latest
-    container_name: alarmplus
+  smilarm:
+    # SMILARM_IMAGE is set by the installer: the prebuilt image from the registry, or smilarm:local when it was built from a clone.
+    image: ${SMILARM_IMAGE:-smilarm:local}
+    container_name: smilarm
     restart: unless-stopped
 
-    # Host networking (Linux/Raspberry Pi): the ESP32 camera and the moOde speaker reach the app on the
-    # device's real address, with no port mapping. If you can't use it, see docs/docker.md ("Bridge networking").
+    # Host networking (Linux/Raspberry Pi): the ESP32 camera and the moOde speaker reach the app on the device's real address,
+    # with no port mapping. Without it see docs/install.md ("Bridge networking").
     network_mode: host
 
     environment:
-      # Only used on the very first start, when the config is created: install.sh sets it if port 8080 is taken.
-      - ALARMPLUS_PORT=${ALARMPLUS_PORT:-}
+      # Only used on the very first start, when the config is created: the installer sets it if port 8080 is taken.
+      - SMILARM_PORT=${SMILARM_PORT:-}
 
     volumes:
-      - alarmplus-state:/state   # config.toml, alarms, logs and the face model live here and survive updates
+      - smilarm-state:/state   # config.toml, alarms, logs and the face model live here and survive updates
 
 volumes:
-  alarmplus-state:
-    name: alarmplus-state
+  smilarm-state:
+    name: smilarm-state

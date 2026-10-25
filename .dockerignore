@@ -1,3 +1,4 @@
+# The image only needs: smilarm/, web/, docker/, requirements.txt. Everything else stays out of the build context.
 .git
 .github
 .venv
@@ -8,13 +9,13 @@ data
 state
 config.toml
 config.toml.bak
+.env
+docker-compose.local.yml
 tests
 docs
 firmware
-camera
 openclaw
-deploy
+scripts
 *.md
-!requirements.txt
-.env
-docker-compose.local.yml
+*.sh
+*.yml

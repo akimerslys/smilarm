@@ -4,9 +4,9 @@ from datetime import datetime, timedelta
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from alarmplus import config
-from alarmplus.engine import Engine
-from alarmplus.store import Store
+from smilarm import config
+from smilarm.engine import Engine
+from smilarm.store import Store
 
 
 class FakeCam:
@@ -161,7 +161,7 @@ def test_webhook_events(tmp_path):
 
     asyncio.run(main())
     assert [e["event"] for e in got] == ["ringing", "dismissed"]
-    assert got[1]["reason"] == "smile" and got[0]["source"] == "alarm-plus"
+    assert got[1]["reason"] == "smile" and got[0]["source"] == "smilarm"
 
 
 def test_broken_webhook_does_not_break_ring(tmp_path):

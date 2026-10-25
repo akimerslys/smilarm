@@ -2,7 +2,7 @@
 # install.sh adds this file automatically when /dev/snd exists. Without sound hardware the container then plays only on remote
 # (moOde) speakers instead of failing to start. Choose the output in Settings -> audio.device.
 services:
-  alarmplus:
+  smilarm:
     devices:
       - /dev/snd:/dev/snd
     group_add:

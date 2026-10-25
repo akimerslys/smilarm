@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from alarmplus import config, settings as st
-from alarmplus.cfgtools import set_values
+from smilarm import config, settings as st
+from smilarm.cfgtools import set_values
 
 
 def test_save_edits_config_toml_in_place(tmp_path):

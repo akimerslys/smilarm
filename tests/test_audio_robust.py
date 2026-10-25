@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from alarmplus import audio, config
+from smilarm import audio, config
 
 
 def make_audio(tmp_path, **kw):

@@ -1,15 +1,15 @@
-"""The documentation must not point at things that don't exist: links, anchors, scripts, settings."""
+"""The documentation must not point at things that don't exist (links, anchors, scripts, settings), and the project has one name."""
 import re
-import subprocess
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from alarmplus import config
+from smilarm import config
 
 ROOT = Path(__file__).resolve().parent.parent
-DOCS = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md")), ROOT / "openclaw" / "skills" / "alarm-plus" / "SKILL.md"]
+DOCS = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md")), ROOT / "openclaw" / "skills" / "smilarm" / "SKILL.md"]
 
 
 def slug(heading: str) -> str:  # GitHub's anchor rule, close enough for our headings
@@ -24,6 +24,10 @@ def anchors(path: Path) -> set[str]:
         if m:
             out.add(slug(m.group(1)))
     return out
+
+
+def test_the_docs_are_the_five_consolidated_pages():
+    assert sorted(p.name for p in (ROOT / "docs").glob("*.md")) == ["hardware.md", "install.md", "integrations.md", "moode.md", "troubleshooting.md"]
 
 
 @pytest.mark.parametrize("doc", DOCS, ids=lambda p: p.relative_to(ROOT).as_posix())
@@ -51,15 +55,16 @@ def test_settings_named_in_docs_exist(doc):
     text = doc.read_text(encoding="utf-8")
     sections = {k for k, v in config.DEFAULTS.items() if isinstance(v, dict)}
     for sect, key in re.findall(r"`(\w+)\.(\w+)(?:[`|]|\s)", text):
-        if sect in sections and key != "local":  # `moode.local` is a hostname, not a setting
+        if sect in sections and key not in ("local",):  # `moode.local` is a hostname, not a setting
             assert key in config.DEFAULTS[sect], f"{doc.name}: `{sect}.{key}` is not a setting"
 
 
-def test_every_script_has_valid_syntax():
+def test_every_script_has_valid_syntax_and_unix_line_endings():
     bash = shutil.which("bash")
     if not bash or "system32" in bash.lower():
         pytest.skip("needs a real bash")
-    scripts = [*ROOT.glob("*.sh"), *(ROOT / "deploy").glob("*.sh"), ROOT / "docker" / "entrypoint.sh", ROOT / "openclaw" / "install.sh"]
+    scripts = [*ROOT.glob("*.sh"), *(ROOT / "scripts").glob("*.sh"), *(ROOT / "scripts" / "lib").glob("*.sh"), ROOT / "scripts" / "smilarm",
+               ROOT / "docker" / "entrypoint.sh"]
     assert len(scripts) >= 8
     for s in scripts:
         r = subprocess.run([bash, "-n", str(s)], capture_output=True, text=True)
@@ -67,12 +72,26 @@ def test_every_script_has_valid_syntax():
         assert "\r" not in s.read_text(encoding="utf-8"), f"{s.name} has CRLF line endings (breaks on Linux)"
 
 
-def test_docker_is_presented_first_and_native_is_optional():
+def test_two_simple_scripts_and_the_docker_path_comes_first():
+    top = sorted(p.name for p in ROOT.glob("*.sh"))
+    assert top == ["install.sh", "uninstall.sh"]  # the only scripts a user ever runs
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert readme.index("bash install.sh") < readme.index("--native")  # the Docker command comes first
-    assert "optional" in readme.lower() and "docs/native_install.md" in readme
-    native = (ROOT / "docs" / "native_install.md").read_text(encoding="utf-8")
-    assert "Docker is the recommended way" in native
-    for script in ("deploy/install.sh", "deploy/uninstall.sh"):
-        head = (ROOT / script).read_text(encoding="utf-8").lower().split("set -")[0]
-        assert "native" in head and ("optional" in head or "remove the native" in head), script
+    assert readme.index("bash install.sh ") < readme.index("bash uninstall.sh ") < readme.index("--native")  # quick start first, extras after
+    assert "docs/install.md" in readme and "docs/hardware.md" in readme
+    assert len(readme.splitlines()) < 100  # the README stays a quick start; the details live in docs/
+
+
+def test_the_old_name_only_survives_in_the_migration_code_and_its_docs():
+    allowed = {"scripts/lib/common.sh", "scripts/install-docker.sh", "scripts/uninstall.sh", "docs/install.md", "README.md", "smilarm/app.py",
+               "tests/test_scripts.py", "tests/test_ui_lib.py", "tests/test_docs.py", "tests/conftest.py", "tests/test_setup_ui_backend.py"}
+    pattern = re.compile(r"alarmplus|Alarm\+|alarm-plus|ALARMPLUS|alarmcam", re.I)
+    files = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True).stdout.split()
+    for f in files:
+        p = ROOT / f
+        if f in allowed or not p.exists() or p.suffix in (".png", ".jpg", ".task", ".xml"):
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        assert not pattern.search(text), f"{f} still uses the old name"

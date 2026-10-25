@@ -3,8 +3,8 @@ import json
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from alarmplus import config
-from alarmplus.app import build
+from smilarm import config
+from smilarm.app import build
 
 
 def run(coro_fn, tmp_path, token=""):
@@ -73,7 +73,7 @@ def test_dismiss_refused_when_idle_or_disabled(tmp_path):
 def test_static_pages(tmp_path):
     async def go(cl):
         r = await cl.get("/")
-        assert r.status == 200 and "Alarm+" in await r.text()
+        assert r.status == 200 and "Smilarm" in await r.text()
         r = await cl.get("/sound/alarm.wav")
         assert r.status == 200 and (await r.read())[:4] == b"RIFF"
 
@@ -95,7 +95,7 @@ def test_sse_first_event_is_snapshot(tmp_path):
 def test_debug_and_smile_test(tmp_path):
     import numpy as np
 
-    from alarmplus.app import CAM, ENGINE
+    from smilarm.app import CAM, ENGINE
 
     class Cam:  # stands in for the camera thread's output; patched onto the real instance
         n = 0

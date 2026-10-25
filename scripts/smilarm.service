@@ -1,0 +1,16 @@
+[Unit]
+Description=Smilarm (smile to dismiss)
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=@HOME@
+Environment=PYTHONPATH=@HOME@/app
+ExecStart=@HOME@/venv/bin/python -m smilarm --config @HOME@/config.toml
+Restart=always
+RestartSec=3
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

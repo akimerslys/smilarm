@@ -1,7 +1,7 @@
 """The OpenCV fallback needs its cascade files; the OpenCV 5 wheels ship an empty cv2/data folder."""
 import pytest
 
-from alarmplus import smile
+from smilarm import smile
 
 
 def test_find_cascades_picks_the_first_complete_folder(tmp_path):
@@ -27,7 +27,7 @@ def test_make_detector_surfaces_the_error_so_the_engine_can_degrade(tmp_path, mo
 
 
 def test_search_path_includes_the_image_and_installer_locations(monkeypatch):
-    monkeypatch.setenv("ALARMPLUS_CASCADES", "/somewhere")
+    monkeypatch.setenv("SMILARM_CASCADES", "/somewhere")
     dirs = smile.cascade_dirs()
     assert "/somewhere" in dirs and "data/cascades" in dirs and "/opt/models" in dirs
 

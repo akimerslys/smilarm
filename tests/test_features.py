@@ -6,10 +6,10 @@ import sys
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from alarmplus import audio, config, settings as st, sysinfo
-from alarmplus.app import AUDIO, ENGINE, build
-from alarmplus.engine import Engine
-from alarmplus.store import Store
+from smilarm import audio, config, settings as st, sysinfo
+from smilarm.app import AUDIO, ENGINE, build
+from smilarm.engine import Engine
+from smilarm.store import Store
 from test_engine import ALARM, FakeAudio, FakeCam, FakeDet
 
 
@@ -218,7 +218,7 @@ def test_settings_endpoints(tmp_path):
 
 
 def test_camera_quality_change_applies_to_camera(tmp_path):
-    from alarmplus.app import CAM
+    from smilarm.app import CAM
 
     async def go(cl, app):
         await cl.put("/api/settings", json={"camera.quality": "high"})

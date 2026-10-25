@@ -5,9 +5,9 @@ import socket
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from alarmplus import config
-from alarmplus.app import build
-from alarmplus.camera import Camera, diagnose_source
+from smilarm import config
+from smilarm.app import build
+from smilarm.camera import Camera, diagnose_source
 
 
 def lines_of(tmp_path, fn, level="INFO"):
@@ -37,7 +37,7 @@ def test_polling_is_not_logged_but_changes_and_failures_are(tmp_path):
     assert "GET /api/system" not in out and "/api/logs" not in out  # no feedback loop from the log panel itself
     assert "POST /api/alarms -> 201" in out
     assert "POST /api/alarms -> 400" in out and "time must be HH:MM" in out
-    assert "Alarm+ started:" in out  # startup banner with the effective setup
+    assert "Smilarm started:" in out  # startup banner with the effective setup
 
 
 def test_debug_level_adds_request_details_and_can_change_live(tmp_path):

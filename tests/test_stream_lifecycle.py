@@ -5,8 +5,8 @@ import logging
 import numpy as np
 from aiohttp.test_utils import TestClient, TestServer
 
-from alarmplus import config
-from alarmplus.app import CAM, ENGINE, build
+from smilarm import config
+from smilarm.app import CAM, ENGINE, build
 
 
 class Det:

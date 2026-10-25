@@ -1,4 +1,4 @@
-# Alarm+ configuration (generated with all default values; edit what you need).
+# Smilarm configuration (generated with all default values; edit what you need).
 # Most of these can also be changed live in the web UI > Settings, which saves them back into this file.
 
 # alarms, the face model, logs and the built-in tone live here (relative to this file)
@@ -20,7 +20,7 @@ public_url = ""
 
 [camera]
 # ESP32 stream URL (http://IP:81/stream) or a local camera index like 0.
-source = "http://alarmcam.local:81/stream"
+source = "http://smilarm-cam.local:81/stream"
 # ESP32 resolution preset: low 320x240, medium 640x480, high 800x600.
 quality = "low"
 # Rotate the picture clockwise so faces are upright (sideways camera: try 90, else 270).
@@ -51,7 +51,7 @@ backend = "local"
 sound = ""
 # Folder of sounds; one is picked at random per alarm. Overrides 'sound'.
 sound_dir = ""
-# mpv/aplay output device, e.g. alsa/plughw:1,0 (see docs/sound_output.md). Empty = default.
+# mpv/aplay output device, e.g. alsa/plughw:1,0 (see docs/hardware.md). Empty = default.
 device = ""
 # Starting volume, %.
 volume_start = 15

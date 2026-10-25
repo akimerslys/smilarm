@@ -3,9 +3,9 @@ import wave
 
 import pytest
 
-from alarmplus import audio, config
-from alarmplus import smile
-from alarmplus.smile import HaarDetector, make_detector
+from smilarm import audio, config
+from smilarm import smile
+from smilarm.smile import HaarDetector, make_detector
 
 
 # ---- config ----
@@ -143,7 +143,7 @@ def test_haar_returns_none_without_face():
 
 # ---- camera presets ----
 def test_camera_presets():
-    from alarmplus.camera import PRESETS, Camera, control_url
+    from smilarm.camera import PRESETS, Camera, control_url
 
     assert PRESETS == {"low": 320, "medium": 480, "high": 640}
     assert Camera("0").width == 320 and Camera("0", "high").width == 640
@@ -202,7 +202,7 @@ def test_library_dir_empty_raises_helpful_error():
 
 
 def test_library_dir_setting_validation(tmp_path):
-    from alarmplus import settings as st
+    from smilarm import settings as st
 
     assert st.validate("moode.library_dir", "ALARM_TRACKS") == "ALARM_TRACKS"
     assert st.validate("moode.library_dir", "") == ""
@@ -214,8 +214,8 @@ def test_library_dir_setting_validation(tmp_path):
 def test_camera_rotation_setting(tmp_path):
     import numpy as np
 
-    from alarmplus import settings as st
-    from alarmplus.camera import ROTATIONS, Camera
+    from smilarm import settings as st
+    from smilarm.camera import ROTATIONS, Camera
 
     assert sorted(ROTATIONS) == [0, 90, 180, 270]
     assert Camera("0", rotate=90).rotate == 90

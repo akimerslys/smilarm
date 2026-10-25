@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Alarm+ — the primary way to run it. Multi-arch friendly (arm64 for Raspberry Pi, amd64).
+# Smilarm — the primary way to run it. Multi-arch friendly (arm64 for Raspberry Pi, amd64).
 # Debian 13 (trixie): its alsa-lib (1.2.14) can drive the Raspberry Pi HDMI audio through the `plughw` converter; bookworm's 1.2.8 cannot
 # ("Sample format non available"), which silenced the alarm in a bookworm-based image.
 FROM python:3.13-slim-trixie
@@ -8,9 +8,9 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app \
-    ALARMPLUS_DOCKER=1 \
+    SMILARM_DOCKER=1 \
     STATE_DIR=/state \
-    ALARMPLUS_CASCADES=/opt/models
+    SMILARM_CASCADES=/opt/models
 
 # mpv + alsa-utils: sound. libgl1/libgles2/libegl1/libglib2.0-0: MediaPipe and OpenCV. openssh-client: hooks that `ssh` to
 # other devices. curl: model download and health checks. tzdata: timezone database.
@@ -19,9 +19,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Not root. uid 1000 matches the default user on Raspberry Pi OS; audio/video give access to /dev/snd and /dev/video*.
-RUN useradd --uid 1000 --create-home --shell /bin/bash --groups audio,video alarmplus \
+RUN useradd --uid 1000 --create-home --shell /bin/bash --groups audio,video smilarm \
  && mkdir -p /state /opt/models \
- && chown alarmplus:alarmplus /state
+ && chown smilarm:smilarm /state
 
 WORKDIR /app
 COPY requirements.txt .
@@ -35,14 +35,14 @@ RUN curl -fsSL -o /opt/models/face_landmarker.task \
 RUN for f in haarcascade_frontalface_default haarcascade_smile; do \
       curl -fsSL -o /opt/models/$f.xml https://raw.githubusercontent.com/opencv/opencv/4.x/data/haarcascades/$f.xml; done
 
-COPY alarmplus ./alarmplus
+COPY smilarm ./smilarm
 COPY web ./web
 COPY docker ./docker
 RUN chmod +x /app/docker/entrypoint.sh
 
-LABEL app=alarmplus org.opencontainers.image.title="Alarm+"
+LABEL app=smilarm org.opencontainers.image.title="Smilarm"
 
-USER alarmplus
+USER smilarm
 VOLUME /state
 EXPOSE 8080
 

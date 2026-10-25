@@ -5,10 +5,10 @@ import time
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from alarmplus import config
-from alarmplus.app import build
-from alarmplus.engine import Engine
-from alarmplus.store import Store
+from smilarm import config
+from smilarm.app import build
+from smilarm.engine import Engine
+from smilarm.store import Store
 from test_engine import ALARM, FakeAudio, FakeCam, FakeDet, make
 
 
@@ -179,7 +179,7 @@ def test_non_ascii_token_is_401_not_500(tmp_path):
 
 
 def test_smile_test_reports_a_broken_detector(tmp_path):
-    from alarmplus.app import ENGINE
+    from smilarm.app import ENGINE
 
     cfg = config.load(None)
     cfg._d["data_dir"] = str(tmp_path)
@@ -216,7 +216,7 @@ def test_relative_paths_in_config_follow_the_config_file_not_the_cwd(tmp_path):
     port = s.getsockname()[1]
     s.close()
     (proj / "config.toml").write_text(f'data_dir = "data"\n[server]\nhost = "127.0.0.1"\nport = {port}\n')
-    p = subprocess.Popen([sys.executable, "-m", "alarmplus", "--config", str(proj / "config.toml")], cwd=elsewhere,
+    p = subprocess.Popen([sys.executable, "-m", "smilarm", "--config", str(proj / "config.toml")], cwd=elsewhere,
                          env={**os.environ, "PYTHONPATH": str(root)}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         for _ in range(100):

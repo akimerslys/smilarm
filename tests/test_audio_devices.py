@@ -4,8 +4,8 @@ import sys
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from alarmplus import audio, config
-from alarmplus.app import build
+from smilarm import audio, config
+from smilarm.app import build
 
 MPV_HELP = """List of detected audio devices:
   'auto' (Autoselect device)

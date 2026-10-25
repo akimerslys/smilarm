@@ -2,17 +2,17 @@
 import re
 from pathlib import Path
 
-from alarmplus import config
-from alarmplus.app import build
+from smilarm import config
+from smilarm.app import build
 
-SKILL = Path(__file__).resolve().parent.parent / "openclaw" / "skills" / "alarm-plus" / "SKILL.md"
+SKILL = Path(__file__).resolve().parent.parent / "openclaw" / "skills" / "smilarm" / "SKILL.md"
 
 
 def test_frontmatter_is_valid():
     text = SKILL.read_text(encoding="utf-8")
     head = text.split("---")[1]
     fields = dict(line.split(": ", 1) for line in head.strip().splitlines())
-    assert fields["name"] == "alarm-plus" and len(fields["description"]) > 40
+    assert fields["name"] == "smilarm" and len(fields["description"]) > 40
 
 
 def test_every_documented_endpoint_exists(tmp_path):

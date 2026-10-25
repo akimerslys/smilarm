@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+# smilarm: manage your Smilarm installation from anywhere. Installed to ~/.smilarm/bin by install.sh (and linked into ~/.local/bin).
+# It does not need the folder you cloned.
+set -uo pipefail
+SELF="$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")"
+SMILARM_HOME="${SMILARM_HOME:-$(cd "$(dirname "$SELF")/.." && pwd)}"
+LIB="$SMILARM_HOME/lib"
+if [ ! -f "$LIB/common.sh" ]; then echo "smilarm: $LIB/common.sh is missing: this is not an installed copy. Run install.sh from the repository." >&2; exit 1; fi
+# shellcheck source=scripts/lib/common.sh
+. "$LIB/common.sh"
+# shellcheck source=scripts/lib/ui.sh
+. "$LIB/ui.sh"
+ui_init /dev/null 0
+MODE=$(cat "$SMILARM_HOME/mode" 2>/dev/null || echo docker)
+COMPOSE_DIR="$SMILARM_HOME/compose"
+APP="$SMILARM_HOME/app" VENV="$SMILARM_HOME/venv" CFG="$SMILARM_HOME/config.toml"
+[ "$MODE" = docker ] && detect_dc
+
+die() { echo "smilarm: $*" >&2; exit 1; }
+dcompose() { (cd "$COMPOSE_DIR" && $DC compose "$@"); }
+env_get() { grep "^$1=" "$COMPOSE_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2-; }
+image_ref() { env_get SMILARM_IMAGE; }
+port() {
+  if [ "$MODE" = docker ]; then $DC exec "$CONTAINER" python -c "from smilarm import config; print(config.load('/state/config.toml').server.port)" 2>/dev/null
+  else (cd "$SMILARM_HOME" && PYTHONPATH="$APP" "$VENV/bin/python" -c "from smilarm import config; print(config.load('$CFG').server.port)" 2>/dev/null); fi
+}
+url() {
+  local ip; ip=$(hostname -I 2>/dev/null | awk '{print $1}'); [ -n "$ip" ] || ip=$(hostname)
+  echo "http://$ip:$(port || echo 8080)"
+}
+wait_healthy() { # up to ~100 s
+  local i st
+  for i in $(seq 1 50); do
+    if [ "$MODE" = docker ]; then st=$($DC inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER" 2>/dev/null || echo missing)
+    else st=$(systemctl is-active smilarm 2>/dev/null); [ "$st" = active ] && st=healthy; fi
+    case "$st" in healthy | running) return 0 ;; exited | dead | missing | failed) break ;; esac
+    sleep 2
+  done
+  return 1
+}
+
+usage() {
+  cat <<EOF
+smilarm $(cat "$SMILARM_HOME/version" 2>/dev/null)   (${MODE} install in $SMILARM_HOME)
+
+  smilarm status            is it running? where is it? which version?
+  smilarm url | open        the address of the web UI
+  smilarm logs [-f]         recent log lines (-f: follow)
+  smilarm start | stop | restart
+  smilarm update            get the newest version, keep your settings and alarms
+  smilarm backup [FILE]     save your config and alarms to a tarball (default: ~/smilarm-backup-<date>.tar.gz)
+  smilarm restore FILE      put a backup back (replaces the current config and alarms)
+  smilarm config            edit config.toml by hand (normally you use the web UI, Settings)
+  smilarm clean             free download/build caches
+  smilarm openclaw          install the OpenClaw skill
+  smilarm uninstall [...]   remove Smilarm (asks before deleting your data; see: smilarm uninstall --help)
+EOF
+}
+
+cmd_status() {
+  if [ "$MODE" = docker ]; then
+    detect_dc
+    local st; st=$($DC ps -a --filter "name=^${CONTAINER}$" --format '{{.Status}}' 2>/dev/null)
+    echo "mode:     docker ($(image_ref))"
+    echo "state:    ${st:-not installed}"
+  else
+    echo "mode:     native"
+    echo "state:    $(systemctl is-active smilarm 2>/dev/null || echo not installed)"
+  fi
+  echo "web UI:   $(url)"
+  echo "version:  $(cat "$SMILARM_HOME/version" 2>/dev/null)"
+  echo "home:     $SMILARM_HOME"
+}
+
+cmd_logs() {
+  local follow=0; [ "${1:-}" = "-f" ] && follow=1
+  if [ "$MODE" = docker ]; then
+    if [ $follow = 1 ]; then $DC logs -f --tail 100 "$CONTAINER"; else $DC logs --tail 100 "$CONTAINER"; fi
+  else
+    if [ $follow = 1 ]; then journalctl -u smilarm -f; else journalctl -u smilarm -n 100 --no-pager; fi
+  fi
+}
+
+cmd_ctl() { # start | stop | restart
+  if [ "$MODE" = docker ]; then
+    case "$1" in
+      start) dcompose up -d --remove-orphans ;;
+      stop) dcompose stop ;;
+      restart) dcompose restart "$CONTAINER" ;;
+    esac
+  else sudo systemctl "$1" smilarm; fi
+}
+
+# Update. Docker with a prebuilt image: pull and recreate. Built from sources: fetch the newest sources and rebuild. Native: fetch and re-run
+# the native installer. Your config and alarms are never touched.
+cmd_update() {
+  local build=0; [ "${1:-}" = "--build" ] && build=1
+  if [ "$MODE" = docker ]; then
+    local ref; ref=$(image_ref)
+    if [ "$build" = 0 ] && [ "$ref" != "$LOCAL_IMAGE" ] && [ -n "$ref" ]; then
+      echo "pulling $ref"; $DC pull "$ref" || die "could not pull $ref"
+    else
+      is_published || die "this install was built from a clone and no download address is configured (SMILARM_REPO): run  git pull && bash install.sh  in your clone"
+      local tmp; tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+      echo "fetching the newest sources"; fetch_source "$tmp" || die "could not download $SMILARM_SOURCE_URL"
+      $DC build --progress=plain -t "$LOCAL_IMAGE" "$tmp" || die "build failed"
+      set_env_var "$COMPOSE_DIR/.env" SMILARM_IMAGE "$LOCAL_IMAGE"
+    fi
+    dcompose up -d --remove-orphans || die "could not start the new version"
+    echo "waiting until it is healthy ..."
+    wait_healthy && echo "updated: $(image_ref) is running" || die "the new version did not become healthy: smilarm logs"
+    $DC image prune -f --filter label=app=smilarm >/dev/null 2>&1 || true
+  else
+    is_published || die "native installs update from a clone: run  git pull && bash install.sh --native  there"
+    local tmp; tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+    fetch_source "$tmp" || die "could not download $SMILARM_SOURCE_URL"
+    bash "$tmp/install.sh" --native --no-edit
+  fi
+}
+
+cmd_backup() {
+  local out="${1:-$HOME/smilarm-backup-$(date +%Y%m%d-%H%M%S).tar.gz}"
+  out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
+  if [ "$MODE" = docker ]; then
+    local img; img=$(image_ref); [ -n "$img" ] || die "unknown image"
+    $DC run --rm --user "$(id -u):$(id -g)" -v "$VOLUME":/state:ro -v "$(dirname "$out")":/backup --entrypoint tar "$img" czf "/backup/$(basename "$out")" -C /state . || die "backup failed"
+  else
+    tar -czf "$out" -C "$SMILARM_HOME" config.toml data 2>/dev/null || die "backup failed"
+  fi
+  chmod 600 "$out" # the config holds your access token
+  echo "backup saved: $out"
+}
+
+cmd_restore() {
+  local f="${1:-}"; [ -f "$f" ] || die "usage: smilarm restore FILE"
+  f="$(cd "$(dirname "$f")" && pwd)/$(basename "$f")"
+  echo "This replaces your current config and alarms with the contents of $f."
+  if [ -t 0 ]; then read -r -p "Continue? [y/N] " a; case "${a:-N}" in [yY]*) ;; *) echo cancelled; exit 1 ;; esac; fi
+  if [ "$MODE" = docker ]; then
+    local img; img=$(image_ref)
+    dcompose stop >/dev/null 2>&1 || true
+    $DC run --rm --user 0 -v "$VOLUME":/state -v "$(dirname "$f")":/backup --entrypoint sh "$img" \
+      -c "rm -rf /state/* /state/.[!.]* 2>/dev/null; tar xzf /backup/$(basename "$f") -C /state && chown -R 1000:1000 /state" || die "restore failed"
+    dcompose up -d >/dev/null
+  else
+    sudo systemctl stop smilarm 2>/dev/null || true
+    rm -rf "$SMILARM_HOME/data" "$CFG" && tar xzf "$f" -C "$SMILARM_HOME" || die "restore failed"
+    sudo systemctl start smilarm
+  fi
+  echo "restored."
+}
+
+cmd_config() {
+  if [ "$MODE" = docker ]; then $DC exec -it "$CONTAINER" nano /state/config.toml && echo "Saved. In the web UI use Settings > Reload file (or: smilarm restart)."
+  else "${EDITOR:-nano}" "$CFG" && echo "Saved. In the web UI use Settings > Reload file (or: smilarm restart)."; fi
+}
+
+cmd_clean() {
+  if [ "$MODE" = docker ]; then
+    echo "removing ALL unused Docker build cache on this machine (images, containers and volumes are not touched) ..."
+    $DC builder prune -af || die "failed"
+    $DC image prune -f --filter label=app=smilarm
+  else
+    "$VENV/bin/pip" cache purge 2>&1 || true
+    sudo apt-get clean && echo "apt package cache cleaned"
+  fi
+}
+
+cmd_openclaw() {
+  local dir="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}/skills/smilarm"
+  mkdir -p "$dir" && cp "$SMILARM_HOME/share/SKILL.md" "$dir/SKILL.md" || die "could not install the skill"
+  echo "installed: $dir/SKILL.md"
+  echo "Set ALARM_URL=$(url) (and ALARM_TOKEN if you use an access token) in the OpenClaw environment."
+}
+
+cmd="${1:-help}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  help | -h | --help) usage ;;
+  version | --version) cat "$SMILARM_HOME/version" ;;
+  status) cmd_status ;;
+  url) url ;;
+  open) u=$(url); (xdg-open "$u" >/dev/null 2>&1 || true); echo "$u" ;;
+  logs) cmd_logs "$@" ;;
+  start | stop | restart) cmd_ctl "$cmd" ;;
+  update | upgrade) cmd_update "$@" ;;
+  backup) cmd_backup "$@" ;;
+  restore) cmd_restore "$@" ;;
+  config) cmd_config ;;
+  clean) cmd_clean ;;
+  openclaw) cmd_openclaw ;;
+  uninstall) exec bash "$LIB/uninstall.sh" "$@" ;;
+  *) echo "smilarm: unknown command '$cmd'" >&2; usage >&2; exit 2 ;;
+esac

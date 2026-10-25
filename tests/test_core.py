@@ -3,8 +3,8 @@ from datetime import datetime
 
 import pytest
 
-from alarmplus.smile import SmileGate
-from alarmplus.store import Store, clean, next_fire
+from smilarm.smile import SmileGate
+from smilarm.store import Store, clean, next_fire
 
 
 def test_gate_requires_hold():
@@ -50,7 +50,7 @@ def test_store_roundtrip(tmp_path):
 
 
 def test_mpd_client_against_fake_server():
-    from alarmplus.audio import MoodePlayer
+    from smilarm.audio import MoodePlayer
 
     got = []
 
