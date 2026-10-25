@@ -41,3 +41,25 @@ def test_cli_write_and_check_config(tmp_path):
     p.write_text("[smile]\nfps = 99\n")
     bad = run("--check-config", str(p))
     assert bad.returncode == 1 and "smile.fps" in bad.stdout
+
+
+def test_config_example_lists_every_parameter_and_is_up_to_date():
+    from pathlib import Path
+
+    example = (Path(__file__).resolve().parent.parent / "config.example.toml").read_text(encoding="utf-8")
+    # regenerate with:  python -m alarmplus --write-config config.example.toml --force
+    assert example == cfgtools.render_defaults(), "config.example.toml is stale"
+    parsed = tomllib.loads(example)
+    for key, value in config.DEFAULTS.items():
+        if isinstance(value, dict):
+            assert set(parsed[key]) == set(value), f"[{key}] differs from the program's parameters"
+        else:
+            assert key in parsed
+    assert cfgtools.check(str(Path(__file__).resolve().parent.parent / "config.example.toml")) == []
+
+
+def test_every_parameter_has_a_comment():
+    lines = cfgtools.render_defaults().split("\n")
+    for i, line in enumerate(lines):
+        if line and not line.startswith(("#", "[")) and "=" in line:
+            assert lines[i - 1].startswith("# ") and len(lines[i - 1]) > 3, f"no description above: {line}"

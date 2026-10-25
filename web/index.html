@@ -94,7 +94,7 @@ $('cam').onclick=()=>setMode('cam');$('st').onclick=()=>setMode('st');
 
 const ROWS=[['smile score','score'],['threshold','threshold'],['hold progress','progress'],['would dismiss','would_dismiss'],['face found','face'],
  ['detector','backend'],['inference ms','infer_ms'],['detect fps','detect_fps'],['detect frame age ms','detect_frame_age_ms'],['frame size','frame_size'],
- ['camera state','cam_state'],['camera error','cam_error'],['camera fps','cam_fps'],['camera frame age ms','cam_frame_age_ms'],['camera reconnects','cam_reconnects'],['camera frames','cam_frames'],
+ ['camera state','cam_state'],['flashlight','cam_flash'],['flashlight error','cam_flash_error'],['camera error','cam_error'],['camera fps','cam_fps'],['camera frame age ms','cam_frame_age_ms'],['camera reconnects','cam_reconnects'],['camera frames','cam_frames'],
  ['quality preset','quality'],['rotate (deg)','rotate'],['detect width','detect_width'],['hold seconds','hold_seconds'],['camera','camera_source'],['alarm ringing','ringing']];
 async function pollDebug(){
  const r=await fetch(q('/api/debug'));if(!r.ok)return;const d=await r.json(),v=$('verdict');

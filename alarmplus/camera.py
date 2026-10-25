@@ -21,12 +21,27 @@ PRESETS = {"low": 320, "medium": 480, "high": 640}
 ROTATIONS = {0: None, 90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
 
 
-def control_url(source, quality: str) -> str | None:
-    """ESP32-CAM /control endpoint for an http stream source; None for local cameras."""
+def _control_base(source, port: int = 80) -> str | None:
     u = urlparse(str(source))
     if u.scheme not in ("http", "https") or not u.hostname:
         return None
-    return f"http://{u.hostname}/control?preset={quality}"
+    return f"http://{u.hostname}:{port}/control" if port != 80 else f"http://{u.hostname}/control"
+
+
+def control_url(source, quality: str, port: int = 80) -> str | None:
+    """ESP32-CAM /control endpoint for an http stream source; None for local cameras."""
+    base = _control_base(source, port)
+    return f"{base}?preset={quality}" if base else None
+
+
+FLASH_TTL = 180  # seconds the ESP32 keeps the LED on by itself; we refresh well before that
+FLASH_REFRESH = 60
+
+
+def flash_url(source, percent: int, ttl: int = FLASH_TTL, port: int = 80) -> str | None:
+    """ESP32-CAM flash LED: led=0..255 (PWM brightness), for=seconds until it switches itself off."""
+    base = _control_base(source, port)
+    return f"{base}?led={round(percent * 255 / 100)}&for={ttl}" if base else None
 
 
 def diagnose_source(source, timeout: float = 3.0) -> str:
@@ -52,7 +67,7 @@ def diagnose_source(source, timeout: float = 3.0) -> str:
 
 
 class Camera:
-    def __init__(self, source: str, quality: str = "low", width: int = 0, rotate: int = 0):
+    def __init__(self, source: str, quality: str = "low", width: int = 0, rotate: int = 0, flash: bool = False, flash_level: int = 30):
         if quality not in PRESETS:
             raise ValueError(f"camera.quality must be one of {sorted(PRESETS)}")
         self.source = int(source) if str(source).isdigit() else source
@@ -69,6 +84,10 @@ class Camera:
         self._t_open = 0.0
         self.state = "off"  # off | connecting | streaming | error
         self.error = ""
+        self.flash, self.flash_level = bool(flash), flash_level  # optional ESP32 flash LED while the camera is in use
+        self.flash_state, self.flash_error = "off", ""  # off | on | error
+        self.control_port = 80  # the ESP32's control server (the stream itself is on 81)
+        self._flash_gen = 0
 
     @staticmethod
     def _check_rotate(rotate: int) -> int:
@@ -76,13 +95,19 @@ class Camera:
             raise ValueError(f"camera.rotate must be one of {sorted(ROTATIONS)}")
         return rotate
 
-    def reconfigure(self, source, quality: str, width: int = 0, rotate: int = 0):
-        """Apply new settings; they take effect the next time the camera is opened."""
+    def reconfigure(self, source, quality: str, width: int = 0, rotate: int = 0, flash: bool | None = None, flash_level: int | None = None):
+        """Apply new settings. Picture settings take effect the next time the camera is opened;
+        the flash follows immediately, even while the camera is in use."""
         if quality not in PRESETS:
             raise ValueError(f"camera.quality must be one of {sorted(PRESETS)}")
         self.source = int(source) if str(source).isdigit() else source
         self.quality, self.width = quality, width or PRESETS[quality]
         self.rotate = self._check_rotate(rotate)
+        if flash is not None or flash_level is not None:
+            with self._lock:
+                self.flash = self.flash if flash is None else bool(flash)
+                self.flash_level = self.flash_level if flash_level is None else flash_level
+                self._start_flash()
 
     def acquire(self):
         with self._lock:
@@ -94,6 +119,7 @@ class Camera:
                 self._fps, self._t_open = 0.0, time.monotonic()
                 self.state, self.error = "connecting", ""
                 threading.Thread(target=self._run, args=(self._stop,), daemon=True).start()
+                self._start_flash()
 
     def release(self):
         with self._lock:
@@ -115,10 +141,49 @@ class Camera:
             "cam_reconnects": self._reconnects,
             "cam_state": self.state,
             "cam_error": self.error,
+            "cam_flash": self.flash_state,
+            "cam_flash_error": self.flash_error,
         }
 
+    # ---- flash LED (optional): on while the camera is in use, i.e. ringing, camera view, smile test ----
+    def _flash_call(self, level: int, gen: int):
+        url = flash_url(self.source, level, port=self.control_port)
+        if not url:
+            return
+        try:
+            urllib.request.urlopen(url, timeout=2).read()
+            if gen == self._flash_gen:
+                self.flash_state, self.flash_error = ("on" if level > 0 else "off"), ""
+        except Exception as e:
+            msg = ("this firmware has no flash support (reflash the ESP32 with the current sketch)"
+                   if getattr(e, "code", None) in (400, 404) else str(getattr(e, "reason", e)))
+            if gen == self._flash_gen:
+                if msg != self.flash_error:
+                    log.warning("flashlight: %s", msg)
+                self.flash_state, self.flash_error = "error", msg
+
+    def _start_flash(self):
+        """(Re)start the flash keep-alive for the current settings. Call with the lock held."""
+        self._flash_gen += 1
+        gen = self._flash_gen
+        if self._refs > 0 and self.flash and control_url(self.source, "low"):
+            threading.Thread(target=self._flash_loop, args=(gen, self._stop), daemon=True).start()
+        elif self.flash_state == "on":  # switched off in Settings while the camera was open
+            threading.Thread(target=self._flash_call, args=(0, gen), daemon=True).start()
+        elif self.flash_state == "error":
+            self.flash_state, self.flash_error = "off", ""
+
+    def _flash_loop(self, gen: int, stop: threading.Event):
+        level = self.flash_level
+        self._flash_call(level, gen)
+        while not stop.wait(FLASH_REFRESH) and gen == self._flash_gen:
+            level = self.flash_level
+            self._flash_call(level, gen)  # keep-alive: the ESP32 turns the LED off by itself if we stop talking
+        if gen == self._flash_gen:  # a newer loop (quick re-open) owns the LED: leave it alone
+            self._flash_call(0, gen)
+
     def _configure(self):
-        url = control_url(self.source, self.quality)
+        url = control_url(self.source, self.quality, self.control_port)
         if not url:
             return
         try:

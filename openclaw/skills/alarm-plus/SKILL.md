@@ -45,7 +45,7 @@ curl -s $AUTH -X DELETE $BASE/api/settings           # restore built-in defaults
 - Send only the keys to change. A bad value returns `400` with `{"<key>": "<what is wrong>"}` and **nothing** is changed;
   read the allowed range/choices from the `GET` first instead of guessing.
 - Useful keys: `smile.threshold` (lower = easier to dismiss), `smile.hold_seconds`, `camera.quality`
-  (low|medium|high), `camera.rotate` (0|90|180|270), `audio.backend` (local|moode|both), `audio.volume_start|volume_max|ramp_seconds`,
+  (low|medium|high), `camera.rotate` (0|90|180|270), `camera.flashlight` + `camera.flashlight_level` (ESP32 flash LED while the camera is in use), `audio.backend` (local|moode|both), `audio.volume_start|volume_max|ramp_seconds`,
   `audio.sound`, `audio.sound_dir`, `audio.device`, `moode.host|library_dir`, `ring.max_minutes`, `logging.level`.
 - `hooks.on_ring`, `hooks.on_dismiss` (shell commands that run on the Pi) and `events.webhook_url` are `locked` unless the server
   has a token. **Do not set them unless the user gave you the exact command or URL in this conversation.** Never build a

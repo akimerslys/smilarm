@@ -56,8 +56,8 @@ def build(cfg, config_path: str | None = None) -> web.Application:
     store = Store(data / "alarms.json")
     builtin = data / "alarm.wav"
     audio = Audio(cfg, builtin)
-    cam = Camera(cfg.camera.source, cfg.camera.quality, cfg.camera.width, cfg.camera.rotate)
-    settings.listeners.append(lambda: cam.reconfigure(cfg.camera.source, cfg.camera.quality, cfg.camera.width, cfg.camera.rotate))
+    cam = Camera(cfg.camera.source, cfg.camera.quality, cfg.camera.width, cfg.camera.rotate, cfg.camera.flashlight, cfg.camera.flashlight_level)
+    settings.listeners.append(lambda: cam.reconfigure(cfg.camera.source, cfg.camera.quality, cfg.camera.width, cfg.camera.rotate, cfg.camera.flashlight, cfg.camera.flashlight_level))
     engine = Engine(cfg, store, audio, cam)
     probe = {"active": False, "stats": {}, "sound": False}
 

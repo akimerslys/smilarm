@@ -16,7 +16,7 @@ EXTRA_HINTS = {
     "smile.backend": "auto | mediapipe | haar",
     "smile.model": "MediaPipe face landmarker model (downloaded by deploy/install.sh)",
     "audio.sound": "file path or http(s) URL; empty = built-in tone",
-    "data_dir": "alarms, settings overrides and the built-in tone live here",
+    "data_dir": "alarms, the face model, logs and the built-in tone live here (relative to this file)",
 }
 
 

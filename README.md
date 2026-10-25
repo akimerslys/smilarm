@@ -23,7 +23,8 @@ ESP32-CAM ──MJPEG──▶ Rpi5: alarmplus (schedule + smile detection + sou
 - Smile detection with MediaPipe Face Landmarker (`mouthSmile` blendshapes, ≈10 ms/frame on a Pi 5); automatic fallback to OpenCV Haar.
 - Runs only while ringing: the camera is opened and the detector works **only during an alarm** (~0 % CPU otherwise, and the
   ESP32 doesn't encode frames without a client). The scheduler sleeps until the next alarm.
-- Camera presets `low` 320×240 (default) / `medium` 640×480 / `high` 800×600, and `camera.rotate` for sideways mounting.
+- Camera presets `low` 320×240 (default) / `medium` 640×480 / `high` 800×600, `camera.rotate` for sideways mounting, and an optional
+  **flashlight** (the ESP32's white LED lights the room while the alarm rings or the camera is being tested).
 - Weekday schedules, one-shot alarms, smooth volume ramp, random sound from a folder.
 - Web UI with live camera view, a **Smile test** with debug numbers, system health, a live log and validated **Settings**.
 - Failsafes: a dead camera unlocks a manual stop, the alarm ends after `max_minutes`, failures in the detector, the webhook or
@@ -72,7 +73,7 @@ program. After editing it by hand: `sudo systemctl restart alarmplus` (or **Relo
 | Section | Highlights |
 |---|---|
 | `[server]` | `port`, `token` (set it on an untrusted network: every `/api` call then needs `Authorization: Bearer …` or `?token=`) |
-| `[camera]` | `source`, `quality`, `rotate` (try 90, else 270, for a sideways camera; the detector needs upright faces) |
+| `[camera]` | `source`, `quality`, `rotate` (try 90, else 270, for a sideways camera; the detector needs upright faces), `flashlight` + `flashlight_level` (see below) |
 | `[smile]` | `threshold` (lower = easier), `hold_seconds`, `fps` |
 | `[audio]` | `backend` local/moode/both, volume ramp, `sound`, `sound_dir`, `device` |
 | `[moode]` | `host`, `port`, `library_dir`, `url`, `fallback_local` |
@@ -84,6 +85,12 @@ program. After editing it by hand: `sudo systemctl restart alarmplus` (or **Relo
 - **Second speaker with moOde** — [`docs/setup_moode_other_device.md`](docs/setup_moode_other_device.md). Set `audio.backend = "moode"`
   (or `"both"`) and `moode.host`. The Rpi3 either fetches the sound from the Rpi5 over HTTP (`/sound/current`), plays a random file
   from its own library (`moode.library_dir`), or plays your `moode.url`.
+- **Flashlight** — `camera.flashlight = true` (or the Settings toggle) switches the ESP32's flash LED on whenever the camera is in use: while an
+  alarm rings, in the **Camera** view and in the **Smile test**; it goes off when they end. `camera.flashlight_level` (percent, default 30) sets the
+  brightness: the LED is very bright and warms up, so keep it modest for long alarms. Needs the current firmware (flash a sketch that accepts
+  `/control?led=0..255&for=SECONDS`). Safety nets: the Pi refreshes the light every minute and the ESP32 switches it off by itself after 3 minutes
+  without a refresh, so a crash or lost Wi-Fi cannot leave it on. Status and errors show in the Smile test table (`flashlight`) and the log.
+  Off by default, and not available for USB/Pi cameras.
 - **Your own sounds, output device, volume** — [`docs/sound_output.md`](docs/sound_output.md).
 - **Run a script after the alarm** — [`docs/after_alarm_hooks.md`](docs/after_alarm_hooks.md): `hooks.on_ring` / `hooks.on_dismiss`
   run on the Rpi5 with `ALARM_*` variables; use `ssh` inside to act on another device.
@@ -123,7 +130,8 @@ Full description: [`docs/uninstall.md`](docs/uninstall.md).
 pip install -r requirements-dev.txt
 python -m pytest tests
 ```
-The suite (≈110 tests) covers the schedule, the smile gate, the ring loop and its failure modes with fake camera/audio/detector, the REST
+`config.example.toml` lists every parameter the program supports and is generated from the code (`python -m alarmplus --write-config config.example.toml --force`; a test fails if it goes stale).
+The suite (≈120 tests) covers the schedule, the smile gate, the ring loop and its failure modes with fake camera/audio/detector, the REST
 API, settings and in-place `config.toml` editing, the MPD client against a fake server, hooks, logging, the OpenClaw skill's consistency
 with the API, and both shell scripts (animated and plain installer UI, uninstaller on a throw-away copy).
 Layout: `alarmplus/` (Python package), `web/index.html` (UI), `firmware/esp32cam/` (ESP32 sketch), `deploy/` (install/uninstall),

@@ -8,6 +8,7 @@ def main():
     p = argparse.ArgumentParser(prog="alarmplus")
     p.add_argument("--config", default="config.toml")
     p.add_argument("--write-config", metavar="PATH", help="write a config file containing every default value, then exit")
+    p.add_argument("--force", action="store_true", help="with --write-config: overwrite an existing file")
     p.add_argument("--check-config", metavar="PATH", help="validate a config file, then exit (status 1 if it has problems)")
     args = p.parse_args()
 
@@ -15,7 +16,7 @@ def main():
         from .cfgtools import render_defaults
 
         path = Path(args.write_config)
-        if path.exists():
+        if path.exists() and not args.force:
             sys.exit(f"{path} already exists, not overwriting")
         path.write_text(render_defaults(), encoding="utf-8", newline="\n")
         print(f"wrote {path}")

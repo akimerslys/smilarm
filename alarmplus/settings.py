@@ -32,6 +32,8 @@ SCHEMA = [
     _f("smile.fps", "int", "Detections per second while ringing.", min=1, max=15),
     _f("camera.quality", "choice", "ESP32 resolution preset: low 320x240, medium 640x480, high 800x600.", choices=["low", "medium", "high"]),
     _f("camera.rotate", "choice", "Rotate the picture clockwise so faces are upright (sideways camera: try 90, else 270).", choices=[0, 90, 180, 270]),
+    _f("camera.flashlight", "bool", "Switch the ESP32 flash LED on while the camera is in use (alarm ringing, Camera view, Smile test). Needs the current firmware."),
+    _f("camera.flashlight_level", "int", "Flash LED brightness, percent. It is very bright and gets warm: stay low for long alarms.", min=1, max=100),
     _f("camera.source", "str", "ESP32 stream URL (http://IP:81/stream) or a local camera index like 0."),
     _f("audio.backend", "choice", "Where the alarm sound plays.", choices=["local", "moode", "both"]),
     _f("audio.volume_start", "int", "Starting volume, %.", min=0, max=100),

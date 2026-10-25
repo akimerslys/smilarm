@@ -1,6 +1,8 @@
 // AI Thinker ESP32-CAM: QVGA MJPEG streamer.
 //   :81/stream  multipart MJPEG (encodes only while a client is connected)
-//   :80/capture single JPEG   :80/health "ok"   :80/control?preset=low|medium|high
+//   :80/capture single JPEG   :80/health "ok"
+//   :80/control?preset=low|medium|high      resolution + JPEG quality
+//   :80/control?led=0..255&for=SECONDS      the white flash LED (GPIO 4), PWM brightness; switches itself off after SECONDS
 // The camera does no vision work: all smile detection runs on the Raspberry Pi.
 #include <Arduino.h>
 #include <ESPmDNS.h>
@@ -26,6 +28,21 @@
 #define VSYNC 25
 #define HREF 23
 #define PCLK 22
+
+// Flash LED: the bright white LED next to the lens (shared with the SD slot, which we don't use).
+#define FLASH_GPIO 4
+#define FLASH_CH 2  // LEDC channel; the camera clock uses channel 0 / timer 0
+static bool flash_on = false;
+static uint32_t flash_off_at = 0;
+
+static void flash_set(int level) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(FLASH_GPIO, level);
+#else
+  ledcWrite(FLASH_CH, level);
+#endif
+  flash_on = level > 0;
+}
 
 static const char *BOUNDARY = "\r\n--frame\r\n";
 
@@ -56,21 +73,33 @@ static esp_err_t capture_handler(httpd_req_t *req) {
   return r;
 }
 
-// /control?preset=low|medium|high  -> resolution + JPEG quality (the Pi sets it before streaming)
+// /control?preset=low|medium|high   and/or   /control?led=0..255&for=SECONDS
 static esp_err_t control_handler(httpd_req_t *req) {
-  char q[64], v[16];
-  if (httpd_req_get_url_query_str(req, q, sizeof q) != ESP_OK ||
-      httpd_query_key_value(q, "preset", v, sizeof v) != ESP_OK)
-    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "preset=low|medium|high");
-  framesize_t fs;
-  int quality;
-  if (!strcmp(v, "low")) { fs = FRAMESIZE_QVGA; quality = 12; }          // 320x240
-  else if (!strcmp(v, "medium")) { fs = FRAMESIZE_VGA; quality = 12; }   // 640x480
-  else if (!strcmp(v, "high")) { fs = FRAMESIZE_SVGA; quality = 10; }    // 800x600
-  else return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "preset=low|medium|high");
-  sensor_t *s = esp_camera_sensor_get();
-  s->set_framesize(s, fs);
-  s->set_quality(s, quality);
+  const char *usage = "preset=low|medium|high and/or led=0..255&for=seconds";
+  char q[96], v[16], t[12];
+  if (httpd_req_get_url_query_str(req, q, sizeof q) != ESP_OK) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, usage);
+  bool did = false;
+  if (httpd_query_key_value(q, "preset", v, sizeof v) == ESP_OK) {
+    framesize_t fs;
+    int quality;
+    if (!strcmp(v, "low")) { fs = FRAMESIZE_QVGA; quality = 12; }          // 320x240
+    else if (!strcmp(v, "medium")) { fs = FRAMESIZE_VGA; quality = 12; }   // 640x480
+    else if (!strcmp(v, "high")) { fs = FRAMESIZE_SVGA; quality = 10; }    // 800x600
+    else return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, usage);
+    sensor_t *s = esp_camera_sensor_get();
+    s->set_framesize(s, fs);
+    s->set_quality(s, quality);
+    did = true;
+  }
+  if (httpd_query_key_value(q, "led", v, sizeof v) == ESP_OK) {
+    int level = constrain(atoi(v), 0, 255);
+    int secs = 180;
+    if (httpd_query_key_value(q, "for", t, sizeof t) == ESP_OK) secs = constrain(atoi(t), 1, 7200);
+    flash_set(level);
+    flash_off_at = millis() + (uint32_t)secs * 1000UL;  // the Pi re-sends this every minute while it needs light
+    did = true;
+  }
+  if (!did) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, usage);
   return httpd_resp_send(req, "ok", 2);
 }
 
@@ -120,6 +149,16 @@ void setup() {
   sensor_t *s = esp_camera_sensor_get();
   s->set_vflip(s, 0);
 
+  // Flash LED PWM. After esp_camera_init, and on an explicit channel: the camera driver configures LEDC behind
+  // Arduino's back, and letting Arduino pick a channel could steal the camera's clock.
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttachChannel(FLASH_GPIO, 5000, 8, FLASH_CH);
+#else
+  ledcSetup(FLASH_CH, 5000, 8);
+  ledcAttachPin(FLASH_GPIO, FLASH_CH);
+#endif
+  flash_set(0);
+
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(HOSTNAME);
   WiFi.setSleep(false);  // lower latency, steadier stream
@@ -141,5 +180,7 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED) down = 0;
   else if (!down) down = millis();
   else if (millis() - down > 60000) ESP.restart();
-  delay(1000);
+  // Auto-off: if the Pi crashes or loses Wi-Fi while the flash is on, the LED still goes dark.
+  if (flash_on && (int32_t)(millis() - flash_off_at) >= 0) flash_set(0);
+  delay(250);
 }

@@ -14,6 +14,10 @@ DEFAULTS = {
         # Rotate frames clockwise by 0/90/180/270 degrees so the face is upright for the detector
         # (a mounted-sideways camera needs 90 or 270). Applies to the preview too.
         "rotate": 0,
+        # ESP32 flash LED (GPIO 4): on while the camera is in use (alarm ringing, Camera view, Smile test).
+        # Helps in a dark room; it is bright and warms up, so keep the level modest. Needs the current firmware.
+        "flashlight": False,
+        "flashlight_level": 30,  # percent of full brightness
         "width": 0,  # 0 = take it from the preset; set a number to override
     },
     "smile": {

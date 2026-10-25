@@ -1,41 +1,91 @@
-# Copy to config.toml. Everything is optional; defaults are in alarmplus/config.py.
+# Alarm+ configuration (generated with all default values; edit what you need).
+# Most of these can also be changed live in the web UI > Settings, which saves them back into this file.
+
+# alarms, the face model, logs and the built-in tone live here (relative to this file)
+data_dir = "data"
 
 [server]
+# interface to listen on (0.0.0.0 = whole network)
+host = "0.0.0.0"
+# web UI / API port
 port = 8080
-token = ""            # set it if the LAN isn't trusted (Bearer token / ?token=)
+# set it if the network isn't trusted: every /api call then needs it (Bearer token or ?token=)
+token = ""
 
 [camera]
-source = "http://alarmcam.local:81/stream"   # ESP32-CAM; or "0" for a USB/Pi camera
-rotate = 0           # 0 | 90 | 180 | 270 clockwise: use 90 or 270 if the camera is mounted sideways
-quality = "low"       # low 320x240 | medium 640x480 | high 800x600 (more detail, more CPU/Wi-Fi)
+# ESP32 stream URL (http://IP:81/stream) or a local camera index like 0.
+source = "http://alarmcam.local:81/stream"
+# ESP32 resolution preset: low 320x240, medium 640x480, high 800x600.
+quality = "low"
+# Rotate the picture clockwise so faces are upright (sideways camera: try 90, else 270).
+rotate = 0
+# Switch the ESP32 flash LED on while the camera is in use (alarm ringing, Camera view, Smile test). Needs the current firmware.
+flashlight = false
+# Flash LED brightness, percent. It is very bright and gets warm: stay low for long alarms.
+flashlight_level = 30
+# detector frame width; 0 = take it from camera.quality
+width = 0
 
 [smile]
-threshold = 0.25       # lower = easier to dismiss
+# auto | mediapipe | haar
+backend = "auto"
+# Smile score needed to count as smiling (lower = easier).
+threshold = 0.5
+# How long the smile must be held.
 hold_seconds = 2.5
+# Detections per second while ringing.
+fps = 6
+# MediaPipe face landmarker model (downloaded by deploy/install.sh)
+model = "data/face_landmarker.task"
 
 [audio]
-backend = "local"     # local | moode | both
+# Where the alarm sound plays.
+backend = "local"
+# Sound file path or http(s) URL. Empty = built-in tone.
+sound = ""
+# Folder of sounds; one is picked at random per alarm. Overrides 'sound'.
+sound_dir = ""
+# mpv/aplay output device, e.g. alsa/plughw:1,0 (see docs/sound_output.md). Empty = default.
+device = ""
+# Starting volume, %.
+volume_start = 15
+# Final volume, %.
+volume_max = 100
+# Seconds to ramp from start to max volume.
 ramp_seconds = 45
-# sound = "/home/pi/alarm-sounds/morning.mp3"   # file or http(s) URL; empty = built-in tone
-# sound_dir = "/home/pi/alarm-sounds"           # random file from this folder per alarm
-# device = "alsa/plughw:CARD=Device,DEV=0"      # `mpv --audio-device=help`; empty = default
 
-# Optional extra: Rpi3 with moOde Audio + speakers
 [moode]
+# Hostname or IP of the moOde device.
 host = "moode.local"
-# library_dir = "ALARM_TRACKS"   # play a random file from this folder of moOde's own library (no transfer from this device)
-# url = "http://192.168.1.50:8080/sound/alarm.wav"   # default: built-in tone served by this app
+# MPD port.
+port = 6600
+# URL moOde plays. Empty = this app serves the sound itself.
+url = ""
+# Play on this device if moOde is unreachable.
+fallback_local = true
+# Folder in moOde's music library (e.g. ALARM_TRACKS): a random file from it is played, nothing is sent from this device.
+library_dir = ""
 
 [ring]
+# Failsafe: stop ringing after this many minutes.
 max_minutes = 15
+# Allow dismissing without a smile (defeats the purpose).
 allow_manual_dismiss = false
+# Camera silent this long = manual dismiss unlocked.
+camera_fail_seconds = 45
 
-[hooks]
-# Shell commands run ON THIS DEVICE when an alarm starts / ends (see docs/after_alarm_hooks.md)
-# on_dismiss = "ssh -o BatchMode=yes pi@rpi3.local 'bash ~/after_alarm.sh'"
-# on_ring = ""
-timeout_seconds = 120
+[logging]
+# Log detail for journalctl and the web UI log: DEBUG adds per-second detection and camera numbers.
+level = "INFO"
 
 [events]
-# OpenClaw (or any) webhook receiving {"source","event","alarm",...}
+# POST ringing/dismissed events here (e.g. OpenClaw).
 webhook_url = ""
+
+[hooks]
+# Shell command run on this device when an alarm starts.
+on_ring = ""
+# Shell command run on this device when an alarm ends.
+on_dismiss = ""
+# Kill a hook that runs longer than this.
+timeout_seconds = 120
