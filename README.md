@@ -8,6 +8,11 @@ ESP32-CAM ──video──▶ Raspberry Pi: Smilarm (schedule · smile detectio
                           └──▶ your script / webhook / OpenClaw (optional)
 ```
 
+<img width="531" height="733" alt="image" src="https://github.com/user-attachments/assets/50fd6f77-e676-4976-9450-73e012f84911" />
+
+
+
+
 ## Quick start
 ```bash
 git clone https://github.com/akimerslys/smilarm && cd smilarm
