@@ -28,15 +28,20 @@ def main():
             print("  -", x)
         sys.exit(1 if problems else 0)
 
+    import os
+
     from aiohttp import web
 
     from . import config
     from .app import build
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
-    cfg = config.load(args.config)
+    cfg_path = Path(args.config).resolve()
+    if cfg_path.exists():
+        os.chdir(cfg_path.parent)  # relative paths in config.toml (data_dir, model) are relative to the file, wherever we were started from
+    cfg = config.load(str(cfg_path))
     # access_log=None: the app logs only what matters (changes and errors), not every UI poll
-    web.run_app(build(cfg, args.config), host=cfg.server.host, port=cfg.server.port, print=None, access_log=None)
+    web.run_app(build(cfg, str(cfg_path)), host=cfg.server.host, port=cfg.server.port, print=None, access_log=None)
 
 
 main()

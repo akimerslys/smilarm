@@ -197,3 +197,37 @@ def test_smile_test_reports_a_broken_detector(tmp_path):
             assert (await (await cl.get("/api/debug")).json())["test_active"] is False  # not left "active"
 
     asyncio.run(main())
+
+
+def test_relative_paths_in_config_follow_the_config_file_not_the_cwd(tmp_path):
+    import os
+    import socket
+    import subprocess
+    import sys
+    import urllib.request
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    proj, elsewhere = tmp_path / "proj", tmp_path / "elsewhere"
+    proj.mkdir()
+    elsewhere.mkdir()
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    (proj / "config.toml").write_text(f'data_dir = "data"\n[server]\nhost = "127.0.0.1"\nport = {port}\n')
+    p = subprocess.Popen([sys.executable, "-m", "alarmplus", "--config", str(proj / "config.toml")], cwd=elsewhere,
+                         env={**os.environ, "PYTHONPATH": str(root)}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=1).read()
+                break
+            except OSError:
+                time.sleep(0.2)
+        else:
+            raise AssertionError("server did not start")
+    finally:
+        p.kill()
+        p.wait()
+    assert (proj / "data" / "alarm.wav").exists() and not (elsewhere / "data").exists()

@@ -54,7 +54,6 @@ real_health() { # wait until the web server answers (200 = ok, 401 = up but a to
   return 1
 }
 hint_health() { if [ "$1" = final ]; then tail -n 1 "$2"; else echo "waiting for the web server to answer…"; fi; }
-hint_plain() { if [ "$1" = final ]; then tail -n 1 "$2"; else :; fi; }
 
 # ---------------------------------------------------------------- --demo: fake versions of the same steps
 demo_line() { printf '%s\n' "$1"; sleep "$DEMO_DELAY"; }

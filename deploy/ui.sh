@@ -109,6 +109,9 @@ hint_apt() {
 }
 
 
+# last line of the step output as the summary, nothing while running
+hint_plain() { if [ "$1" = final ]; then tail -n 1 "$2"; fi; }
+
 # ---- steps --------------------------------------------------------------------------------------
 
 ui_plan() { STEP_TOTAL=$#; STEP_N=0; }

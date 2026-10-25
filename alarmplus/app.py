@@ -82,7 +82,7 @@ def build(cfg, config_path: str | None = None) -> web.Application:
         if request.method != "GET":
             log.info("%s %s -> %s (from %s)", request.method, request.path, resp.status, request.remote)
         else:
-            log.debug("GET %s -> %s", request.path_qs, resp.status)
+            log.debug("GET %s -> %s", request.path, resp.status)  # path only: ?token= must not reach the logs
         return resp
 
     async def body(req):

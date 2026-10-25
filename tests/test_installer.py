@@ -88,3 +88,85 @@ def test_demo_animated_run_shows_progress_bar_and_spinner():
 
     assert re.search(r"downloading (aiohttp|opencv_python_headless|mediapipe)-[0-9.]+ \([0-9.]+ MB\)", r.stdout)  # live: what, and how big
     assert "✔" in r.stdout
+
+
+# ---------------- uninstall.sh ----------------
+def fake_project(tmp_path):
+    """A throw-away copy of the scripts plus the things an install leaves behind."""
+    proj = tmp_path / "proj"
+    shutil.copytree(ROOT / "deploy", proj / "deploy")
+    (proj / ".venv" / "bin").mkdir(parents=True)
+    (proj / ".venv" / "bin" / "python").write_text("x")
+    (proj / "data").mkdir()
+    (proj / "data" / "alarms.json").write_text('[{"id": "a1", "time": "07:00"}, {"id": "b2", "time": "08:00"}]')
+    (proj / "config.toml").write_text("[smile]\nthreshold = 0.4\n")
+    (proj / "README.md").write_text("project files stay")
+    return proj
+
+
+def uninstall(proj, *flags, home=None, **env):
+    e = {**os.environ, "ALARMPLUS_UNIT": str(proj / "no-such.service"), "HOME": str(home or proj.parent / "home")}
+    e.update(env)
+    return decoded(subprocess.run([BASH, str(proj / "deploy" / "uninstall.sh"), "--plain", *flags], cwd=proj, capture_output=True, timeout=60, env=e))
+
+
+def test_uninstall_dry_run_changes_nothing(tmp_path):
+    proj = fake_project(tmp_path)
+    r = uninstall(proj, "--dry-run", "--purge", "--yes")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Dry run finished" in r.stdout and "(dry run, not done)" in r.stdout and "2 alarm(s)" in r.stdout
+    assert (proj / ".venv").exists() and (proj / "data" / "alarms.json").exists() and (proj / "config.toml").exists()
+
+
+def test_uninstall_default_keeps_data_and_project_files(tmp_path):
+    proj = fake_project(tmp_path)
+    r = uninstall(proj, "--yes")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (proj / ".venv").exists()  # the environment goes
+    assert (proj / "data" / "alarms.json").exists() and (proj / "config.toml").exists()  # your data stays
+    assert (proj / "README.md").exists() and (proj / "deploy" / "uninstall.sh").exists()  # the folder is never deleted
+    assert "Alarm+ is uninstalled" in r.stdout and "rm -rf" in r.stdout and "kept" in r.stdout
+
+
+def test_uninstall_purge_backs_up_then_deletes(tmp_path):
+    import tarfile
+
+    proj = fake_project(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    r = uninstall(proj, "--yes", "--purge", home=home)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (proj / "data").exists() and not (proj / "config.toml").exists() and not (proj / ".venv").exists()
+    backups = list(home.glob("alarmplus-backup-*.tar.gz"))
+    assert len(backups) == 1
+    with tarfile.open(backups[0]) as t:
+        names = t.getnames()
+        assert "data/alarms.json" in names and "config.toml" in names
+        assert b"b2" in t.extractfile("data/alarms.json").read()  # the alarms really are in the backup
+
+
+def test_uninstall_purge_no_backup_and_idempotent(tmp_path):
+    proj = fake_project(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    assert uninstall(proj, "--yes", "--purge", "--no-backup", home=home).returncode == 0
+    assert not list(home.glob("alarmplus-backup-*"))
+    again = uninstall(proj, "--yes", "--purge", home=home)  # nothing left: must not fail
+    assert again.returncode == 0 and "Nothing to remove" in again.stdout
+
+
+def test_uninstall_openclaw_skill_only_when_asked(tmp_path):
+    proj = fake_project(tmp_path)
+    ws = tmp_path / "ws"
+    skill = ws / "skills" / "alarm-plus"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("x")
+    uninstall(proj, "--yes", OPENCLAW_WORKSPACE=str(ws))
+    assert skill.exists()  # --yes alone never touches the skill
+    uninstall(proj, "--yes", "--openclaw", OPENCLAW_WORKSPACE=str(ws))
+    assert not skill.exists() and ws.exists()
+
+
+def test_uninstall_rejects_unknown_options(tmp_path):
+    r = uninstall(fake_project(tmp_path), "--nuke")
+    assert r.returncode == 2 and "unknown option" in r.stdout
