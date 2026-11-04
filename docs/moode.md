@@ -9,6 +9,7 @@ Pi 1 (smilarm) ──MPD commands, TCP 6600──▶ Rpi3 (moOde/MPD) ──▶ 
         ▲                                         │
         └──────── HTTP GET /sound/current ◀───────┘   (moOde pulls the sound from the Rpi5)
 ```
+Full diagram with the fallback path (editable in [draw.io](https://app.diagrams.net)): [diagrams/moode.drawio](diagrams/moode.drawio).
 
 If the moOde device is off or unreachable, the alarm falls back to playing on the Rpi5
 (`moode.fallback_local = true`), so you never oversleep because of a dead speaker.

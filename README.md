@@ -7,6 +7,7 @@ ESP32-CAM ──video──▶ Raspberry Pi: Smilarm (schedule · smile detectio
                           ├──▶ speakers on the Pi, or a second Pi running moOde
                           └──▶ your script / webhook / OpenClaw (optional)
 ```
+Full diagram (editable in [draw.io](https://app.diagrams.net)): [docs/diagrams/overview.drawio](docs/diagrams/overview.drawio).
 
 ## Quick start
 ```bash
