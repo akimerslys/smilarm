@@ -2,12 +2,9 @@
 
 **An alarm clock you switch off with a smile.** It rings until you smile at the camera for 2–3 seconds in a row.
 
-```
-ESP32-CAM ──video──▶ Raspberry Pi: Smilarm (schedule · smile detection · sound · web UI · REST API)
-                          ├──▶ speakers on the Pi, or a second Pi running moOde
-                          └──▶ your script / webhook / OpenClaw (optional)
-```
-Full diagram (editable in [draw.io](https://app.diagrams.net)): [docs/diagrams/overview.drawio](docs/diagrams/overview.drawio).
+![How the pieces fit](docs/diagrams/overview.png)
+
+<sub>Editable source: [overview.drawio](docs/diagrams/overview.drawio) (open it at [app.diagrams.net](https://app.diagrams.net)).</sub>
 
 <img width="531" height="733" alt="image" src="https://github.com/user-attachments/assets/50fd6f77-e676-4976-9450-73e012f84911" />
 

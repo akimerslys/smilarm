@@ -4,12 +4,9 @@ Smilarm can ring through a second Raspberry Pi (for example an Rpi3 with speaker
 [moOde Audio](https://moodeaudio.org). Smilarm stays on the main device (Rpi5) and only *remote-controls*
 moOde's MPD server over the network. Nothing from Smilarm is installed on the moOde device.
 
-```
-Pi 1 (smilarm) ──MPD commands, TCP 6600──▶ Rpi3 (moOde/MPD) ──▶ speakers
-        ▲                                         │
-        └──────── HTTP GET /sound/current ◀───────┘   (moOde pulls the sound from the Rpi5)
-```
-Full diagram with the fallback path (editable in [draw.io](https://app.diagrams.net)): [diagrams/moode.drawio](diagrams/moode.drawio).
+![Ringing through a second Pi with moOde](diagrams/moode.png)
+
+<sub>Editable source: [moode.drawio](diagrams/moode.drawio) (open it at [app.diagrams.net](https://app.diagrams.net)).</sub>
 
 If the moOde device is off or unreachable, the alarm falls back to playing on the Rpi5
 (`moode.fallback_local = true`), so you never oversleep because of a dead speaker.
